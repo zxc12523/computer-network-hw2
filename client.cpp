@@ -8,7 +8,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
-// #include <sys/sendfile.h>
+#include <sys/sendfile.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -26,8 +26,11 @@
     } while (0)
 
 int sockfd, clientfd;
+int fd;
+char init_msg[1024];
+char end_msg[1024] = "sending the ending message\n";
+char command[1024], buf[1024];
 char username[512], ip[512], port[512];
-char command[1024], tmp[1024];
 
 fd_set rfd, working_set;
 
@@ -39,20 +42,8 @@ int recv_bytes = 0;
 char file_size[256];
 struct stat file_stat;
 
-int offset;
+off_t offset;
 int remain_bytes;
-
-void FL_SET(int fd, int flag)
-{
-    int val;
-    if (val = fcntl(fd, F_GETFL, 0) < 0)
-        fprintf(stderr, "get flag err\n");
-
-    val |= flag;
-
-    if (fcntl(fd, F_SETFL, val) < 0)
-        fprintf(stderr, "set flag err\n");
-}
 
 int init(int argc, char **argv)
 {
@@ -88,13 +79,13 @@ int init(int argc, char **argv)
         ERR_EXIT("connect");
     }
 
-    FL_SET(sockfd, O_NONBLOCK);
+    // FL_SET(sockfd, O_NONBLOCK);
 
     mkdir("./client_database", S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
     chdir("./client_database");
 
-    sprintf(tmp, "hello %s\n", username);
-    write(sockfd, tmp, 1024);
+    sprintf(buf, "hello %s\n", username);
+    send(sockfd, buf, 1024, 0);
 
     FD_ZERO(&rfd);
     FD_SET(sockfd, &rfd);
@@ -105,20 +96,86 @@ int init(int argc, char **argv)
     return 0;
 }
 
+void FL_SET(int fd, int flag)
+{
+    int val;
+    if (val = fcntl(fd, F_GETFL, 0) < 0)
+        fprintf(stderr, "get flag err\n");
+
+    val |= flag;
+
+    if (fcntl(fd, F_SETFL, val) < 0)
+        fprintf(stderr, "set flag err\n");
+}
+
+void send_syn(int fd, char *msg, int flag)
+{
+    fprintf(stderr, "syning\n");
+    if (send(fd, msg, 1024, flag) < 0)
+    {
+        ERR_EXIT("sending syn error");
+    }
+}
+
+void recv_syn(int fd, char *msg, int flag)
+{
+    fprintf(stderr, "syning\n");
+    if (recv(fd, msg, 1024, flag) < 0)
+    {
+        ERR_EXIT("receiving syn error");
+    }
+}
+
+void send_ack(int fd, char *msg, int flag)
+{
+    fprintf(stderr, "acking\n");
+    if (send(fd, msg, 1024, flag) < 0)
+    {
+        ERR_EXIT("sending ack error");
+    }
+}
+
+void recv_ack(int fd, char *msg, int flag)
+{
+    fprintf(stderr, "acking\n");
+    if (recv(fd, msg, 1024, flag) < 0)
+    {
+        ERR_EXIT("receiving ack error");
+    }
+}
+
+void send_end(int fd, char *msg, int flag)
+{
+    fprintf(stderr, "ending\n");
+    if (send(fd, msg, 1024, flag) < 0)
+    {
+        ERR_EXIT("sending end error");
+    }
+}
+
+void recv_end(int fd, char *msg, int flag)
+{
+    fprintf(stderr, "ending\n");
+    if (recv(fd, msg, 1024, flag) < 0)
+    {
+        ERR_EXIT("receiving end error");
+    }
+}
+
 void parse_command(char *command, std::vector<std::string> &commands)
 {
     command[strlen(command) - 1] = '\0';
     std::string tar = std::string(command);
     std::string delimiter = " ";
 
-    std::string tmp;
+    std::string buf;
     size_t pos = 0;
 
     while ((pos = tar.find(delimiter)) != std::string::npos)
     {
-        tmp = tar.substr(0, pos);
-        if (tmp.size())
-            commands.push_back(tmp);
+        buf = tar.substr(0, pos);
+        if (buf.size())
+            commands.push_back(buf);
         tar.erase(0, pos + delimiter.length());
     }
     commands.push_back(tar);
@@ -126,110 +183,113 @@ void parse_command(char *command, std::vector<std::string> &commands)
 
 void process_command(std::vector<std::string> commands)
 {
-    memcpy(&working_set, &rfd, sizeof(rfd));
-
-    if (select(1024 + 1, &working_set, NULL, NULL, &timeout) < 0)
-    {
-        ERR_EXIT("select");
-    }
-
     if (commands[0] == "ls")
     {
+        memcpy(&working_set, &rfd, sizeof(rfd));
+
+        if (select(1024 + 1, &working_set, NULL, NULL, &timeout) < 0)
+        {
+            ERR_EXIT("select");
+        }
+
         if (FD_ISSET(sockfd, &working_set))
         {
-            while (read(sockfd, tmp, 1024) != -1)
+            while (read(sockfd, buf, 1024) != -1)
             {
-                fprintf(stderr, "%s\n", tmp);
+                fprintf(stderr, "%s\n", buf);
             }
         }
     }
     else if (commands[0] == "put")
     {
-        char filename[1024], init_msg[1024];
-        sprintf(filename, "./%s", commands[1]);
-        int fd = open(filename, O_RDONLY);
+        const char *filename = commands[1].c_str();
 
-        if (fstat(fd, &file_stat) < 0) {
+        fprintf(stderr, "filename: %s\n", filename);
+
+        if ((fd = open(filename, O_RDONLY)) < 0)
+        {
+            ERR_EXIT("open");
+        }
+
+        if (fstat(fd, &file_stat) < 0)
+        {
             ERR_EXIT("open file error");
         }
 
-        sprintf(init_msg, "sending %d char.", file_stat.st_size);
+        sprintf(init_msg, "sending %ld bytes.", file_stat.st_size);
 
-        if (send(sockfd, init_msg, 1024, 0) < 0) {
-            ERR_EXIT("sending greeting error");
-        }
+        send_syn(sockfd, init_msg, 0);
+        recv_ack(sockfd, init_msg, 0);
 
         offset = 0;
         remain_bytes = file_stat.st_size;
 
-        while(((sent_bytes = sendfile(sockfd, fd, &offset, BUFSIZ)) > 0 && (remain_bytes > 0))) {
+        fprintf(stderr, "file size: %ld\n", remain_bytes);
+
+        while ((remain_bytes > 0) && ((sent_bytes = sendfile(sockfd, fd, &offset, BUFSIZ)) > 0))
+        {
+            fprintf(stderr, "sent bytes: %ld bytes\n", sent_bytes);
             remain_bytes -= sent_bytes;
+            fprintf(stderr, "remaining file size: %ld\n", remain_bytes);
         }
+
+        recv_end(sockfd, end_msg, 0);
+
+        close(fd);
     }
     else if (commands[0] == "get")
     {
-        char filename[1024];
-        sprintf(filename, "./%s", commands[1]);
-        int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC);
-
-        
-        if (recv(sockfd, file_size, 1024, 0) < 0) {
-            ERR_EXIT("receiving greeting error");
+        if ((fd = open(commands[1].c_str(), O_CREAT | O_RDWR | O_TRUNC, 0644)) < 0)
+        {
+            ERR_EXIT("open file error");
         }
+
+        recv_syn(sockfd, init_msg, 0);
+        send_ack(sockfd, init_msg, MSG_NOSIGNAL);
 
         offset = 0;
-        remain_bytes = atoi(file_size);
+        remain_bytes = atoi(init_msg + 8);
 
-        while(((recv_bytes = recv(sockfd, tmp, 1024, 0)) > 0 && (remain_bytes > 0))) {
-            remain_bytes -= sent_bytes;
-            write(fd, tmp, 1024);
+        fprintf(stderr, "file size: %ld\n", remain_bytes);
+
+        while ((remain_bytes > 0) && ((recv_bytes = recv(sockfd, buf, 1024, 0)) > 0))
+        {
+            fprintf(stderr, "received bytes: %ld bytes\n", recv_bytes);
+            remain_bytes -= recv_bytes;
+            fprintf(stderr, "remaining file size: %ld\n", remain_bytes);
+            if (write(fd, buf, recv_bytes) < 0)
+            {
+                ERR_EXIT("write file error");
+            }
         }
+
+        send_end(sockfd, end_msg, MSG_NOSIGNAL);
 
         close(fd);
     }
     else if (commands[0] == "play")
     {
-        
-    }
-    else if (commands[0] == "ban")
-    {
-        if (FD_ISSET(sockfd, &working_set))
-        {
-            while (read(sockfd, tmp, 1024) != -1)
-            {
-                fprintf(stderr, "%s\n", tmp);
-            }
-        }
-    }
-    else if (commands[0] == "unban")
-    {
-        if (FD_ISSET(sockfd, &working_set))
-        {
-            while (read(sockfd, tmp, 1024) != -1)
-            {
-                fprintf(stderr, "%s\n", tmp);
-            }
-        }
-    }
-    else if (commands[0] == "blacklist")
-    {
-        if (FD_ISSET(sockfd, &working_set))
-        {
-            while (read(sockfd, tmp, 1024) != -1)
-            {
-                fprintf(stderr, "%s\n", tmp);
-            }
-        }
+        // placeholder
     }
     else
     {
-        if (FD_ISSET(sockfd, &working_set))
+        recv_syn(sockfd, init_msg, 0);
+        send_ack(sockfd, init_msg, MSG_NOSIGNAL);
+
+        fprintf(stderr, "%s", init_msg);
+
+        offset = 0;
+        remain_bytes = atoi(init_msg + 8);
+
+        while ((remain_bytes > 0) && ((recv_bytes = recv(sockfd, buf, 1024, 0)) > 0))
         {
-            while (read(sockfd, tmp, 1024) != -1)
-            {
-                fprintf(stderr, "%s\n", tmp);
-            }
+            fprintf(stderr, "received bytes: %ld bytes\n", recv_bytes);
+            remain_bytes -= recv_bytes;
+            fprintf(stderr, "remaining file size: %ld\n", remain_bytes);
+            fprintf(stderr, "%s", buf);
         }
+
+        send_end(sockfd, end_msg, MSG_NOSIGNAL);
     }
 }
 
@@ -250,20 +310,12 @@ int main(int argc, char **argv)
         fprintf(stderr, "$ ");
 
         read(STDIN_FILENO, command, 1024);
-        write(sockfd, command, 1024);
+        send(sockfd, command, 1024, 0);
 
         std::vector<std::string> commands;
         parse_command(command, commands);
 
-        if (fork() == 0)
-        {
-            process_command(commands);
-            exit(0);
-        }
-        else
-        {
-            wait(NULL);
-        }
+        process_command(commands);
 
         memset(command, 0, sizeof(command));
     }
