@@ -61,6 +61,7 @@ char init_msg[1024];
 char end_msg[1024] = "sending the ending message\n";
 char permission_denied_msg[1024] = "permisson denied\n\0";
 char invalid_command_msg[1024] = "invalid commond\n\0";
+char greeting_msg[1024] = "greeting\n\0";
 
 char file_size[1024];
 struct stat file_stat;
@@ -258,13 +259,19 @@ void parse_request(request *req, std::vector<std::string> &commands)
 
 void process_request(request *req, std::vector<std::string> &commands)
 {
-    if (banlist.find(req->username) != banlist.end())
+    if (commands[0] == "greeting")
     {
-        sprintf(init_msg, "sending %ld bytes", strlen(permission_denied_msg) + 1);
-        send_syn(req->conn_fd, init_msg, MSG_NOSIGNAL);
-        recv_ack(req->conn_fd, init_msg, 0);
-        send(req->conn_fd, permission_denied_msg, strlen(permission_denied_msg) + 1, MSG_NOSIGNAL);
-        recv_end(req->conn_fd, end_msg, 0);
+        if (banlist.find(req->username) == banlist.end())
+        {
+            fprintf(stderr, "greeting: %s\n", req->username.c_str());
+            fprintf(stderr, "len: %d msg: %s", strlen(greeting_msg) + 1, greeting_msg);
+            send(req->conn_fd, greeting_msg, strlen(greeting_msg) + 1, MSG_NOSIGNAL);
+        }
+        else
+        {
+            fprintf(stderr, "denied: %s\n", req->username.c_str());
+            send(req->conn_fd, permission_denied_msg, strlen(permission_denied_msg) + 1, MSG_NOSIGNAL);
+        }
     }
     else if (commands[0] == "hello")
     {
@@ -279,6 +286,8 @@ void process_request(request *req, std::vector<std::string> &commands)
         const char *path = req->username.c_str();
         chdir(path);
 
+        std::string tmp;
+
         struct dirent *di;
         DIR *dir = opendir(".");
 
@@ -290,8 +299,16 @@ void process_request(request *req, std::vector<std::string> &commands)
 
         while ((di = readdir(dir)) != NULL)
         {
-            send(req->conn_fd, di->d_name, 1024, MSG_NOSIGNAL);
+            tmp += di->d_name;
+            tmp += '\n';
         }
+        tmp += '\0';
+
+        sprintf(init_msg, "sending %ld bytes", tmp.size() + 1);
+        send_syn(req->conn_fd, init_msg, MSG_NOSIGNAL);
+        recv_ack(req->conn_fd, init_msg, 0);
+        send(req->conn_fd, tmp.c_str(), tmp.size() + 1, MSG_NOSIGNAL);
+        recv_end(req->conn_fd, end_msg, 0);
 
         closedir(dir);
         chdir("..");
@@ -410,16 +427,20 @@ void process_request(request *req, std::vector<std::string> &commands)
         std::string tmp;
 
         for (auto i : banlist)
+        {
             tmp += i;
+            tmp += '\n';
+        }
+        tmp += '\0';
 
-        sprintf(init_msg, "sending %ld bytes", req->username != "admin" ? strlen(permission_denied_msg) + 1 : tmp.size());
+        sprintf(init_msg, "sending %ld bytes", req->username != "admin" ? strlen(permission_denied_msg) + 1 : tmp.size() + 1);
         send_syn(req->conn_fd, init_msg, MSG_NOSIGNAL);
         recv_ack(req->conn_fd, init_msg, 0);
 
         if (req->username != "admin")
             send(req->conn_fd, permission_denied_msg, strlen(permission_denied_msg) + 1, MSG_NOSIGNAL);
         else
-            send(req->conn_fd, tmp.c_str(), tmp.size(), MSG_NOSIGNAL);
+            send(req->conn_fd, tmp.c_str(), tmp.size() + 1, MSG_NOSIGNAL);
 
         recv_end(req->conn_fd, end_msg, 0);
     }
@@ -458,8 +479,8 @@ int main(int argc, char **argv)
 
     while (1)
     {
-        if ((time++) % 100000 == 0)
-            fprintf(stderr, "time: %d\n", time - 1);
+        if ((time++) % 200000 == 0)
+            fprintf(stderr, "time: %d\n", time / 200000);
 
         memcpy(&working_set, &rfd, sizeof(rfd));
         if (select(maxfd + 1, &working_set, NULL, NULL, &timeout) < 0)

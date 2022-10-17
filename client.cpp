@@ -183,24 +183,7 @@ void parse_command(char *command, std::vector<std::string> &commands)
 
 void process_command(std::vector<std::string> commands)
 {
-    if (commands[0] == "ls")
-    {
-        memcpy(&working_set, &rfd, sizeof(rfd));
-
-        if (select(1024 + 1, &working_set, NULL, NULL, &timeout) < 0)
-        {
-            ERR_EXIT("select");
-        }
-
-        if (FD_ISSET(sockfd, &working_set))
-        {
-            while (read(sockfd, buf, 1024) != -1)
-            {
-                fprintf(stderr, "%s\n", buf);
-            }
-        }
-    }
-    else if (commands[0] == "put")
+    if (commands[0] == "put")
     {
         const char *filename = commands[1].c_str();
 
@@ -276,7 +259,7 @@ void process_command(std::vector<std::string> commands)
         recv_syn(sockfd, init_msg, 0);
         send_ack(sockfd, init_msg, MSG_NOSIGNAL);
 
-        fprintf(stderr, "%s", init_msg);
+        fprintf(stderr, "%s\n", init_msg);
 
         offset = 0;
         remain_bytes = atoi(init_msg + 8);
@@ -310,12 +293,23 @@ int main(int argc, char **argv)
         fprintf(stderr, "$ ");
 
         read(STDIN_FILENO, command, 1024);
-        send(sockfd, command, 1024, 0);
 
-        std::vector<std::string> commands;
-        parse_command(command, commands);
+        sprintf(init_msg, "greeting\n");
 
-        process_command(commands);
+        send(sockfd, init_msg, 1024, MSG_NOSIGNAL);
+        recv(sockfd, init_msg, 1024, 0);
+
+        if (strcmp(init_msg, "greeting\n") == 0)
+        {
+            send(sockfd, command, 1024, 0);
+            std::vector<std::string> commands;
+            parse_command(command, commands);
+            process_command(commands);
+        }
+        else
+        {
+            fprintf(stderr, "%s", init_msg);
+        }
 
         memset(command, 0, sizeof(command));
     }
