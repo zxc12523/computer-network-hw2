@@ -12,7 +12,7 @@ SER = server
 CV = openCV
 PTH = pthread
 
-all: server client opencv pthread
+all: server client opencv
   
 server: $(SERVER)
 	$(CXX) $(SERVER) -o $(SER)  
