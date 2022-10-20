@@ -14,9 +14,12 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
+#include "opencv2/opencv.hpp"
 #include <string>
 #include <vector>
 #include <iostream>
+
+using namespace cv;
 
 #define ERR_EXIT(a) \
     do              \
@@ -108,60 +111,6 @@ void FL_SET(int fd, int flag)
         fprintf(stderr, "set flag err\n");
 }
 
-void send_syn(int fd, char *msg, int flag)
-{
-    fprintf(stderr, "syning\n");
-    if (send(fd, msg, 1024, flag) < 0)
-    {
-        ERR_EXIT("sending syn error");
-    }
-}
-
-void recv_syn(int fd, char *msg, int flag)
-{
-    fprintf(stderr, "syning\n");
-    if (recv(fd, msg, 1024, flag) < 0)
-    {
-        ERR_EXIT("receiving syn error");
-    }
-}
-
-void send_ack(int fd, char *msg, int flag)
-{
-    fprintf(stderr, "acking\n");
-    if (send(fd, msg, 1024, flag) < 0)
-    {
-        ERR_EXIT("sending ack error");
-    }
-}
-
-void recv_ack(int fd, char *msg, int flag)
-{
-    fprintf(stderr, "acking\n");
-    if (recv(fd, msg, 1024, flag) < 0)
-    {
-        ERR_EXIT("receiving ack error");
-    }
-}
-
-void send_end(int fd, char *msg, int flag)
-{
-    fprintf(stderr, "ending\n");
-    if (send(fd, msg, 1024, flag) < 0)
-    {
-        ERR_EXIT("sending end error");
-    }
-}
-
-void recv_end(int fd, char *msg, int flag)
-{
-    fprintf(stderr, "ending\n");
-    if (recv(fd, msg, 1024, flag) < 0)
-    {
-        ERR_EXIT("receiving end error");
-    }
-}
-
 void parse_command(char *command, std::vector<std::string> &commands)
 {
     command[strlen(command) - 1] = '\0';
@@ -199,10 +148,8 @@ void process_command(std::vector<std::string> commands)
             ERR_EXIT("open file error");
         }
 
-        sprintf(init_msg, "sending %ld bytes.", file_stat.st_size);
-
-        send_syn(sockfd, init_msg, 0);
-        recv_ack(sockfd, init_msg, 0);
+        sprintf(init_msg, "%01023ld", file_stat.st_size);
+        send(sockfd, init_msg, 1024, 0);
 
         offset = 0;
         remain_bytes = file_stat.st_size;
@@ -211,12 +158,10 @@ void process_command(std::vector<std::string> commands)
 
         while ((remain_bytes > 0) && ((sent_bytes = sendfile(sockfd, fd, &offset, BUFSIZ)) > 0))
         {
-            fprintf(stderr, "sent bytes: %ld bytes\n", sent_bytes);
+            // fprintf(stderr, "sent bytes: %ld bytes\n", sent_bytes);
             remain_bytes -= sent_bytes;
-            fprintf(stderr, "remaining file size: %ld\n", remain_bytes);
+            // fprintf(stderr, "remaining file size: %ld\n", remain_bytes);
         }
-
-        recv_end(sockfd, end_msg, 0);
 
         close(fd);
     }
@@ -227,11 +172,10 @@ void process_command(std::vector<std::string> commands)
             ERR_EXIT("open file error");
         }
 
-        recv_syn(sockfd, init_msg, 0);
-        send_ack(sockfd, init_msg, MSG_NOSIGNAL);
+        recv(sockfd, init_msg, 1024, 0);
 
         offset = 0;
-        remain_bytes = atoi(init_msg + 8);
+        remain_bytes = atoi(init_msg);
 
         fprintf(stderr, "file size: %ld\n", remain_bytes);
 
@@ -246,23 +190,72 @@ void process_command(std::vector<std::string> commands)
             }
         }
 
-        send_end(sockfd, end_msg, MSG_NOSIGNAL);
-
         close(fd);
     }
     else if (commands[0] == "play")
     {
-        // placeholder
+        Mat client_img;
+        int width, height, imgSize, maxBytes, frame_num;
+
+        recv(sockfd, init_msg, 1024, 0);
+        width = atoi(init_msg);
+        height = atoi(init_msg + 200);
+        imgSize = atoi(init_msg + 400);
+        maxBytes = atoi(init_msg + 600);
+        frame_num = atoi(init_msg + 800);
+
+        remain_bytes = frame_num * imgSize;
+
+        client_img = Mat::zeros(height, width, CV_8UC3);
+
+        if (!client_img.isContinuous())
+        {
+            client_img = client_img.clone();
+        }
+
+        uchar *iptr = client_img.data;
+        char buffer[maxBytes];
+
+        int flag = 1;
+        int copy_from = 0;
+
+        while (flag && (remain_bytes > 0) && ((recv_bytes = recv(sockfd, buffer + copy_from, maxBytes - copy_from, 0)) > 0))
+        {
+            copy_from += recv_bytes;
+            remain_bytes -= recv_bytes;
+
+            if (copy_from == maxBytes)
+            {
+                copy_from = 0;
+                for (int i = 0; i < maxBytes / imgSize; i++)
+                {
+                    memcpy(iptr, buffer + copy_from, imgSize);
+                    imshow("Video", client_img);
+                    copy_from += imgSize;
+                    char c = (char)waitKey(33.3333);
+                    if (c == 27)
+                    {
+                        flag = 0;
+                        break;
+                    }
+                }
+                copy_from = 0;
+            }
+        }
+
+        destroyAllWindows();
+
+        while ((remain_bytes > 0) && ((recv_bytes = recv(sockfd, buffer, maxBytes, 0)) > 0))
+        {
+            remain_bytes -= recv_bytes;
+        }
     }
     else
     {
-        recv_syn(sockfd, init_msg, 0);
-        send_ack(sockfd, init_msg, MSG_NOSIGNAL);
-
-        fprintf(stderr, "%s\n", init_msg);
+        recv(sockfd, init_msg, 1024, 0);
 
         offset = 0;
-        remain_bytes = atoi(init_msg + 8);
+        remain_bytes = atoi(init_msg);
 
         while ((remain_bytes > 0) && ((recv_bytes = recv(sockfd, buf, 1024, 0)) > 0))
         {
@@ -271,8 +264,6 @@ void process_command(std::vector<std::string> commands)
             fprintf(stderr, "remaining file size: %ld\n", remain_bytes);
             fprintf(stderr, "%s", buf);
         }
-
-        send_end(sockfd, end_msg, MSG_NOSIGNAL);
     }
 }
 
