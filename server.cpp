@@ -49,8 +49,11 @@ typedef struct
     char last_buf[1024];
     size_t last_buf_len;
 
-    long send_bytes;
-    long remain_bytes;
+    long long sended_bytes;
+    long long max_send_bytes;
+    long long remain_bytes;
+
+    VideoCapture cap;
 
 } request;
 
@@ -67,6 +70,7 @@ fd_set rfd, working_set;
 
 int sent_bytes = 0;
 int recv_bytes = 0;
+int send_buff = 1024 * 512;
 
 int fd;
 int ret;
@@ -89,7 +93,8 @@ static void init_request(request *req)
     req->conn_fd = -1;
     req->buf_len = 0;
     req->last_buf_len = 0;
-    req->send_bytes = 0;
+    req->sended_bytes = 0;
+    req->max_send_bytes = 0;
     req->remain_bytes = 0;
 }
 
@@ -342,12 +347,18 @@ void process_request(request *req, std::vector<std::string> &commands)
 
         const char *video_name = commands[1].c_str();
 
-        Mat server_img;
         VideoCapture cap(video_name);
+
+        if (req->remain_bytes)
+        {
+            cap = req->cap;
+        }
 
         int width = cap.get(CAP_PROP_FRAME_WIDTH);
         int height = cap.get(CAP_PROP_FRAME_HEIGHT);
+        int frame_num = cap.get(CAP_PROP_FRAME_COUNT);
 
+        Mat server_img;
         server_img = Mat::zeros(height, width, CV_8UC3);
 
         if (!server_img.isContinuous())
@@ -356,22 +367,37 @@ void process_request(request *req, std::vector<std::string> &commands)
         }
 
         int imgSize = server_img.total() * server_img.elemSize();
-        int frame_num = cap.get(CAP_PROP_FRAME_COUNT);
 
-        fprintf(stderr, "%d %d %d %d %d\n", width, height, server_img.total(), server_img.elemSize(), frame_num);
+        req->sended_bytes = 0;
+        req->max_send_bytes = 1 * imgSize;
 
-        sprintf(init_msg, "%200ld%200ld%200ld%200ld%200ld%23d", width, height, server_img.total(), server_img.elemSize(), frame_num, 0);
-        send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
-
-        char buffer[imgSize];
-
-        for (int i = 0; i < frame_num; i++)
+        if (req->remain_bytes == 0)
         {
-            cap >> server_img;
-            send(req->conn_fd, server_img.data, imgSize, MSG_NOSIGNAL);
+            req->remain_bytes = frame_num * imgSize;
+            fprintf(stderr, "%d %d %d %d %d\n", width, height, imgSize, req->max_send_bytes, frame_num);
+            sprintf(init_msg, "%200ld%200ld%200ld%200ld%200ld%23d", width, height, imgSize, req->max_send_bytes, frame_num, 0);
+            send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
         }
 
-        cap.release();
+        while (req->sended_bytes < req->max_send_bytes && req->remain_bytes > 0)
+        {
+            cap >> server_img;
+            int s = send(req->conn_fd, server_img.data, imgSize, MSG_NOSIGNAL);
+            req->sended_bytes += s;
+            req->remain_bytes -= s;
+        }
+
+        // fprintf(stderr, "remain bytes: %d\n", req->remain_bytes);
+
+        if (req->remain_bytes == 0)
+        {
+            cap.release();
+        }
+        else
+        {
+            req->cap = cap;
+        }
+
         chdir("..");
     }
     else if (commands[0] == "ban")
@@ -423,7 +449,7 @@ void process_request(request *req, std::vector<std::string> &commands)
         send(req->conn_fd, invalid_command_msg, strlen(invalid_command_msg) + 1, MSG_NOSIGNAL);
     }
 
-    fprintf(stderr, "return from process_request\n");
+    // fprintf(stderr, "return from process_request\n");
 }
 
 int main(int argc, char **argv)
@@ -491,15 +517,11 @@ int main(int argc, char **argv)
                         fprintf(stderr, "accepting new connection... fd %d from %s\n", requests[conn_fd].conn_fd, requests[conn_fd].hostname);
 
                         FD_SET(conn_fd, &rfd);
-                        if (setsockopt(conn_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0)
-                        {
-                            ERR_EXIT("setsockopt failed\n");
-                        }
 
-                        if (setsockopt(conn_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) < 0)
-                        {
-                            ERR_EXIT("setsockopt failed\n");
-                        }
+                        // if (setsockopt(conn_fd, SOL_SOCKET, SO_SNDBUF, &send_buff, sizeof(send_buff)) < 0)
+                        // {
+                        //     ERR_EXIT("setsockopt failed\n");
+                        // }
                     }
                 }
                 else
@@ -518,6 +540,12 @@ int main(int argc, char **argv)
                         process_request(&requests[i], commands);
                     }
                 }
+            }
+            else if (requests[i].remain_bytes)
+            {
+                std::vector<std::string> commands;
+                parse_request(&requests[i], commands);
+                process_request(&requests[i], commands);
             }
         }
     }
