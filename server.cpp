@@ -13,10 +13,14 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+
 #include <string>
 #include <vector>
 #include <set>
 #include <iostream>
+
+#include "opencv2/opencv.hpp"
+using namespace cv;
 
 #define ERR_EXIT(a) \
     do              \
@@ -36,9 +40,18 @@ typedef struct
 {
     char hostname[512];
     std::string username;
+
     int conn_fd;
+
     char buf[1024];
     size_t buf_len;
+
+    char last_buf[1024];
+    size_t last_buf_len;
+
+    long send_bytes;
+    long remain_bytes;
+
 } request;
 
 server svr;
@@ -75,14 +88,13 @@ static void init_request(request *req)
 {
     req->conn_fd = -1;
     req->buf_len = 0;
+    req->last_buf_len = 0;
+    req->send_bytes = 0;
+    req->remain_bytes = 0;
 }
 
 static void free_request(request *reqP)
 {
-    /*if (reqP->filename != NULL) {
-        free(reqP->filename);
-        reqP->filename = NULL;
-    }*/
     init_request(reqP);
 }
 
@@ -118,7 +130,7 @@ static void init_server(unsigned int port)
         ERR_EXIT("listen");
     }
 
-    maxfd = getdtablesize();
+    maxfd = 1024;
     requests = (request *)malloc(sizeof(request) * maxfd);
     if (requests == NULL)
     {
@@ -152,60 +164,6 @@ void FL_SET(int fd, int flag)
 
     if (fcntl(fd, F_SETFL, val) < 0)
         fprintf(stderr, "set flag err\n");
-}
-
-void send_syn(int fd, char *msg, int flag)
-{
-    fprintf(stderr, "syning\n");
-    if (send(fd, msg, 1024, flag) < 0)
-    {
-        ERR_EXIT("sending syn error");
-    }
-}
-
-void recv_syn(int fd, char *msg, int flag)
-{
-    fprintf(stderr, "syning\n");
-    if (recv(fd, msg, 1024, flag) < 0)
-    {
-        ERR_EXIT("receiving syn error");
-    }
-}
-
-void send_ack(int fd, char *msg, int flag)
-{
-    fprintf(stderr, "acking\n");
-    if (send(fd, msg, 1024, flag) < 0)
-    {
-        ERR_EXIT("sending ack error");
-    }
-}
-
-void recv_ack(int fd, char *msg, int flag)
-{
-    fprintf(stderr, "acking\n");
-    if (recv(fd, msg, 1024, flag) < 0)
-    {
-        ERR_EXIT("receiving ack error");
-    }
-}
-
-void send_end(int fd, char *msg, int flag)
-{
-    fprintf(stderr, "ending\n");
-    if (send(fd, msg, 1024, flag) < 0)
-    {
-        ERR_EXIT("sending end error");
-    }
-}
-
-void recv_end(int fd, char *msg, int flag)
-{
-    fprintf(stderr, "ending\n");
-    if (recv(fd, msg, 1024, flag) < 0)
-    {
-        ERR_EXIT("receiving end error");
-    }
 }
 
 int handle_request(request *req)
@@ -304,11 +262,9 @@ void process_request(request *req, std::vector<std::string> &commands)
         }
         tmp += '\0';
 
-        sprintf(init_msg, "sending %ld bytes", tmp.size() + 1);
-        send_syn(req->conn_fd, init_msg, MSG_NOSIGNAL);
-        recv_ack(req->conn_fd, init_msg, 0);
+        sprintf(init_msg, "%01023ld", tmp.size() + 1);
+        send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
         send(req->conn_fd, tmp.c_str(), tmp.size() + 1, MSG_NOSIGNAL);
-        recv_end(req->conn_fd, end_msg, 0);
 
         closedir(dir);
         chdir("..");
@@ -323,26 +279,23 @@ void process_request(request *req, std::vector<std::string> &commands)
             ERR_EXIT("open file error");
         }
 
-        recv_syn(req->conn_fd, init_msg, 0);
-        send_ack(req->conn_fd, init_msg, MSG_NOSIGNAL);
+        recv(req->conn_fd, init_msg, 1024, 0);
 
         offset = 0;
-        remain_bytes = atoi(init_msg + 8);
+        remain_bytes = atoi(init_msg);
 
         fprintf(stderr, "file size: %d\n", remain_bytes);
 
         while ((remain_bytes > 0) && ((recv_bytes = recv(req->conn_fd, req->buf, 1024, 0)) > 0))
         {
-            fprintf(stderr, "received bytes: %d bytes\n", remain_bytes);
+            // fprintf(stderr, "received bytes: %d bytes\n", remain_bytes);
             remain_bytes -= recv_bytes;
-            fprintf(stderr, "remaining file size: %d\n", remain_bytes);
+            // fprintf(stderr, "remaining file size: %d\n", remain_bytes);
             if (write(fd, req->buf, recv_bytes) < 0)
             {
                 ERR_EXIT("write file error");
             }
         }
-
-        send_end(req->conn_fd, end_msg, MSG_NOSIGNAL);
 
         close(fd);
         chdir("..");
@@ -364,10 +317,8 @@ void process_request(request *req, std::vector<std::string> &commands)
             ERR_EXIT("open file error");
         }
 
-        sprintf(init_msg, "sending %ld bytes.", file_stat.st_size);
-
-        send_syn(req->conn_fd, init_msg, MSG_NOSIGNAL);
-        recv_ack(req->conn_fd, init_msg, 0);
+        sprintf(init_msg, "%01023ld", file_stat.st_size);
+        send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
 
         offset = 0;
         remain_bytes = file_stat.st_size;
@@ -381,22 +332,52 @@ void process_request(request *req, std::vector<std::string> &commands)
             fprintf(stderr, "remaining file size: %d\n", remain_bytes);
         }
 
-        recv_end(req->conn_fd, end_msg, 0);
-
         close(fd);
         chdir("..");
     }
     else if (commands[0] == "play")
     {
-        // placeholder
+        const char *path = req->username.c_str();
+        chdir(path);
+
+        const char *video_name = commands[1].c_str();
+
+        Mat server_img;
+        VideoCapture cap(video_name);
+
+        int width = cap.get(CAP_PROP_FRAME_WIDTH);
+        int height = cap.get(CAP_PROP_FRAME_HEIGHT);
+
+        server_img = Mat::zeros(height, width, CV_8UC3);
+
+        if (!server_img.isContinuous())
+        {
+            server_img = server_img.clone();
+        }
+
+        int imgSize = server_img.total() * server_img.elemSize();
+        int frame_num = cap.get(CAP_PROP_FRAME_COUNT);
+
+        fprintf(stderr, "%d %d %d %d %d\n", width, height, server_img.total(), server_img.elemSize(), frame_num);
+
+        sprintf(init_msg, "%200ld%200ld%200ld%200ld%200ld%23d", width, height, server_img.total(), server_img.elemSize(), frame_num, 0);
+        send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
+
+        char buffer[imgSize];
+
+        for (int i = 0; i < frame_num; i++)
+        {
+            cap >> server_img;
+            send(req->conn_fd, server_img.data, imgSize, MSG_NOSIGNAL);
+        }
+
+        cap.release();
+        chdir("..");
     }
     else if (commands[0] == "ban")
     {
-        sprintf(init_msg, "sending %ld bytes\n", req->username != "admin" ? strlen(permission_denied_msg) + 1 : 0);
-        send_syn(req->conn_fd, init_msg, MSG_NOSIGNAL);
-        fprintf(stderr, "len: %d, syn_msg: %s", strlen(init_msg), init_msg);
-        recv_ack(req->conn_fd, init_msg, 0);
-        fprintf(stderr, "len: %d, ack_msg: %s", strlen(init_msg), init_msg);
+        sprintf(init_msg, "%01023ld", req->username != "admin" ? strlen(permission_denied_msg) + 1 : 0);
+        send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
 
         if (req->username != "admin")
             send(req->conn_fd, permission_denied_msg, strlen(permission_denied_msg) + 1, MSG_NOSIGNAL);
@@ -404,23 +385,17 @@ void process_request(request *req, std::vector<std::string> &commands)
             for (int i = 1; i < commands.size(); i++)
                 if (commands[i] != "admin")
                     banlist.insert(commands[i]);
-
-        recv_end(req->conn_fd, end_msg, 0);
-        fprintf(stderr, "len: %d, end_msg: %s", strlen(end_msg), end_msg);
     }
     else if (commands[0] == "unban")
     {
-        sprintf(init_msg, "sending %ld bytes", req->username != "admin" ? strlen(permission_denied_msg) + 1 : 0);
-        send_syn(req->conn_fd, init_msg, MSG_NOSIGNAL);
-        recv_ack(req->conn_fd, init_msg, 0);
+        sprintf(init_msg, "%01023ld", req->username != "admin" ? strlen(permission_denied_msg) + 1 : 0);
+        send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
 
         if (req->username != "admin")
             send(req->conn_fd, permission_denied_msg, strlen(permission_denied_msg) + 1, MSG_NOSIGNAL);
         else
             for (int i = 1; i < commands.size(); i++)
                 banlist.erase(commands[i]);
-
-        recv_end(req->conn_fd, end_msg, 0);
     }
     else if (commands[0] == "blacklist")
     {
@@ -433,24 +408,19 @@ void process_request(request *req, std::vector<std::string> &commands)
         }
         tmp += '\0';
 
-        sprintf(init_msg, "sending %ld bytes", req->username != "admin" ? strlen(permission_denied_msg) + 1 : tmp.size() + 1);
-        send_syn(req->conn_fd, init_msg, MSG_NOSIGNAL);
-        recv_ack(req->conn_fd, init_msg, 0);
+        sprintf(init_msg, "%01023ld", req->username != "admin" ? strlen(permission_denied_msg) + 1 : tmp.size() + 1);
+        send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
 
         if (req->username != "admin")
             send(req->conn_fd, permission_denied_msg, strlen(permission_denied_msg) + 1, MSG_NOSIGNAL);
         else
             send(req->conn_fd, tmp.c_str(), tmp.size() + 1, MSG_NOSIGNAL);
-
-        recv_end(req->conn_fd, end_msg, 0);
     }
     else
     {
-        sprintf(init_msg, "sending %ld bytes", strlen(invalid_command_msg) + 1);
-        send_syn(req->conn_fd, init_msg, MSG_NOSIGNAL);
-        recv_ack(req->conn_fd, init_msg, 0);
+        sprintf(init_msg, "%01023ld", strlen(invalid_command_msg) + 1);
+        send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
         send(req->conn_fd, invalid_command_msg, strlen(invalid_command_msg) + 1, MSG_NOSIGNAL);
-        recv_end(req->conn_fd, end_msg, 0);
     }
 
     fprintf(stderr, "return from process_request\n");
@@ -521,7 +491,15 @@ int main(int argc, char **argv)
                         fprintf(stderr, "accepting new connection... fd %d from %s\n", requests[conn_fd].conn_fd, requests[conn_fd].hostname);
 
                         FD_SET(conn_fd, &rfd);
-                        // FL_SET(conn_fd, O_NONBLOCK);
+                        if (setsockopt(conn_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0)
+                        {
+                            ERR_EXIT("setsockopt failed\n");
+                        }
+
+                        if (setsockopt(conn_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) < 0)
+                        {
+                            ERR_EXIT("setsockopt failed\n");
+                        }
                     }
                 }
                 else
