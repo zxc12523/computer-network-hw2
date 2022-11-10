@@ -6,7 +6,7 @@ using namespace cv;
 
 int main(int argc, char *argv[])
 {
-     // Mat server_img, client_img;
+     Mat server_img, client_img;
      VideoCapture cap("./video.mpg");
 
      // Get the resolution of the video

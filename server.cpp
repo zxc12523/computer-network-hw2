@@ -70,7 +70,6 @@ fd_set rfd, working_set;
 
 int sent_bytes = 0;
 int recv_bytes = 0;
-int send_buff = 1024 * 512;
 
 int fd;
 int ret;
@@ -517,11 +516,6 @@ int main(int argc, char **argv)
                         fprintf(stderr, "accepting new connection... fd %d from %s\n", requests[conn_fd].conn_fd, requests[conn_fd].hostname);
 
                         FD_SET(conn_fd, &rfd);
-
-                        // if (setsockopt(conn_fd, SOL_SOCKET, SO_SNDBUF, &send_buff, sizeof(send_buff)) < 0)
-                        // {
-                        //     ERR_EXIT("setsockopt failed\n");
-                        // }
                     }
                 }
                 else
