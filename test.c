@@ -20,5 +20,9 @@ int main()
     fprintf(stderr, "%s len: %d atoi: %d\n", buf, strlen(buf), atoi(buf + 600));
     fprintf(stderr, "%s len: %d atoi: %d\n", buf, strlen(buf), atoi(buf + 800));
 
+    char buffer[8192];
+
+    printf("%ld\n", sizeof(buffer));
+
     return 0;
 }
