@@ -576,7 +576,7 @@ int main(int argc, char **argv)
             }
             else if (requests[i].remain_bytes)
             {
-                process_request(&requests[i]s;
+                process_request(&requests[i]);
             }
         }
     }
