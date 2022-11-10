@@ -19,8 +19,8 @@
 #include <set>
 #include <iostream>
 
-#include "opencv2/opencv.hpp"
-using namespace cv;
+// #include "opencv2/opencv.hpp"
+// using namespace cv;
 
 #define ERR_EXIT(a) \
     do              \
@@ -53,39 +53,39 @@ typedef struct
     long long max_send_bytes;
     long long remain_bytes;
 
-    VideoCapture cap;
+    // VideoCapture cap;
 
 } request;
 
 server svr;
 request *requests;
-fd_set rfd, working_set;
-off_t offset;
-
-std::set<std::string> banlist;
-
-struct timeval timeout;
-struct stat file_stat;
-struct sockaddr_in cliaddr;
-
-int cliaddr_size;
-
-int fd;
 int maxfd;
-int conn_fd;
 
-int ret;
-int remain_bytes;
+struct sockaddr_in cliaddr;
+int cliaddr_size;
+int conn_fd;
+struct timeval timeout;
+
+fd_set rfd, working_set;
 
 int sent_bytes = 0;
 int recv_bytes = 0;
 
+int fd;
+int ret;
 char init_msg[1024];
-char greeting_msg[1024] = "greeting\n\0";
-char invalid_command_msg[1024] = "invalid commond\n\0";
+char end_msg[1024] = "sending the ending message\n";
 char permission_denied_msg[1024] = "permisson denied\n\0";
+char invalid_command_msg[1024] = "invalid commond\n\0";
+char greeting_msg[1024] = "greeting\n\0";
 
-char recv_buffer[8192];
+char file_size[1024];
+struct stat file_stat;
+
+off_t offset;
+int remain_bytes;
+
+std::set<std::string> banlist;
 
 static void init_request(request *req)
 {
@@ -155,44 +155,7 @@ static void init_server(unsigned int port)
     // }
     chdir("./server_database");
 
-    FD_ZERO(&rfd);
-    FD_SET(svr.listen_fd, &rfd);
-
-    cliaddr_size = sizeof(cliaddr);
-    timeout.tv_sec = 0;
-    timeout.tv_usec = 50;
-
     return;
-}
-
-static void accept_connection()
-{
-    conn_fd = accept(svr.listen_fd, (struct sockaddr *)&cliaddr, (socklen_t *)&cliaddr_size);
-    if (conn_fd < 0)
-    {
-        printf("errno: %d\n", errno);
-        if (errno == EINTR || errno == EAGAIN)
-        {
-            fprintf(stderr, "EAGAIN\n");
-        }
-        else
-        {
-            if (errno == ENFILE)
-            {
-                (void)fprintf(stderr, "out of file descriptor table ... (maxconn %d)\n", maxfd);
-            }
-            ERR_EXIT("accept");
-        }
-    }
-    else
-    {
-        requests[conn_fd].conn_fd = conn_fd;
-        strcpy(requests[conn_fd].hostname, inet_ntoa(cliaddr.sin_addr));
-
-        fprintf(stderr, "accepting new connection... fd %d from %s\n", requests[conn_fd].conn_fd, requests[conn_fd].hostname);
-
-        FD_SET(conn_fd, &rfd);
-    }
 }
 
 void FL_SET(int fd, int flag)
@@ -256,12 +219,8 @@ void parse_request(request *req, std::vector<std::string> &commands)
     commands.push_back(tar);
 }
 
-void process_request(request *req)
+void process_request(request *req, std::vector<std::string> &commands)
 {
-    std::vector<std::string> commands;
-
-    parse_request(req, commands);
-
     if (commands[0] == "greeting")
     {
         if (banlist.find(req->username) == banlist.end())
@@ -331,12 +290,12 @@ void process_request(request *req)
 
         fprintf(stderr, "file size: %d\n", remain_bytes);
 
-        while ((remain_bytes > 0) && ((recv_bytes = recv(req->conn_fd, recv_buffer, sizeof(recv_buffer), 0)) > 0))
+        while ((remain_bytes > 0) && ((recv_bytes = recv(req->conn_fd, req->buf, 1024, 0)) > 0))
         {
             // fprintf(stderr, "received bytes: %d bytes\n", remain_bytes);
             remain_bytes -= recv_bytes;
             // fprintf(stderr, "remaining file size: %d\n", remain_bytes);
-            if (write(fd, recv_buffer, recv_bytes) < 0)
+            if (write(fd, req->buf, recv_bytes) < 0)
             {
                 ERR_EXIT("write file error");
             }
@@ -382,63 +341,63 @@ void process_request(request *req)
     }
     else if (commands[0] == "play")
     {
-        const char *path = req->username.c_str();
-        chdir(path);
+        // const char *path = req->username.c_str();
+        // chdir(path);
 
-        const char *video_name = commands[1].c_str();
+        // const char *video_name = commands[1].c_str();
 
-        VideoCapture cap(video_name);
+        // VideoCapture cap(video_name);
 
-        if (req->remain_bytes)
-        {
-            cap = req->cap;
-        }
+        // if (req->remain_bytes)
+        // {
+        //     cap = req->cap;
+        // }
 
-        int width = cap.get(CAP_PROP_FRAME_WIDTH);
-        int height = cap.get(CAP_PROP_FRAME_HEIGHT);
-        int frame_num = cap.get(CAP_PROP_FRAME_COUNT);
+        // int width = cap.get(CAP_PROP_FRAME_WIDTH);
+        // int height = cap.get(CAP_PROP_FRAME_HEIGHT);
+        // int frame_num = cap.get(CAP_PROP_FRAME_COUNT);
 
-        Mat server_img;
-        server_img = Mat::zeros(height, width, CV_8UC3);
+        // Mat server_img;
+        // server_img = Mat::zeros(height, width, CV_8UC3);
 
-        if (!server_img.isContinuous())
-        {
-            server_img = server_img.clone();
-        }
+        // if (!server_img.isContinuous())
+        // {
+        //     server_img = server_img.clone();
+        // }
 
-        int imgSize = server_img.total() * server_img.elemSize();
+        // int imgSize = server_img.total() * server_img.elemSize();
 
-        req->sended_bytes = 0;
-        req->max_send_bytes = 1 * imgSize;
+        // req->sended_bytes = 0;
+        // req->max_send_bytes = 1 * imgSize;
 
-        if (req->remain_bytes == 0)
-        {
-            req->remain_bytes = frame_num * imgSize;
-            fprintf(stderr, "%d %d %d %d %d\n", width, height, imgSize, req->max_send_bytes, frame_num);
-            sprintf(init_msg, "%200ld%200ld%200ld%200ld%200ld%23d", width, height, imgSize, req->max_send_bytes, frame_num, 0);
-            send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
-        }
+        // if (req->remain_bytes == 0)
+        // {
+        //     req->remain_bytes = frame_num * imgSize;
+        //     fprintf(stderr, "%d %d %d %d %d\n", width, height, imgSize, req->max_send_bytes, frame_num);
+        //     sprintf(init_msg, "%200ld%200ld%200ld%200ld%200ld%23d", width, height, imgSize, req->max_send_bytes, frame_num, 0);
+        //     send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
+        // }
 
-        while (req->sended_bytes < req->max_send_bytes && req->remain_bytes > 0)
-        {
-            cap >> server_img;
-            int s = send(req->conn_fd, server_img.data, imgSize, MSG_NOSIGNAL);
-            req->sended_bytes += s;
-            req->remain_bytes -= s;
-        }
+        // while (req->sended_bytes < req->max_send_bytes && req->remain_bytes > 0)
+        // {
+        //     cap >> server_img;
+        //     int s = send(req->conn_fd, server_img.data, imgSize, MSG_NOSIGNAL);
+        //     req->sended_bytes += s;
+        //     req->remain_bytes -= s;
+        // }
 
-        // fprintf(stderr, "remain bytes: %d\n", req->remain_bytes);
+        // // fprintf(stderr, "remain bytes: %d\n", req->remain_bytes);
 
-        if (req->remain_bytes == 0)
-        {
-            cap.release();
-        }
-        else
-        {
-            req->cap = cap;
-        }
+        // if (req->remain_bytes == 0)
+        // {
+        //     cap.release();
+        // }
+        // else
+        // {
+        //     req->cap = cap;
+        // }
 
-        chdir("..");
+        // chdir("..");
     }
     else if (commands[0] == "ban")
     {
@@ -492,21 +451,6 @@ void process_request(request *req)
     // fprintf(stderr, "return from process_request\n");
 }
 
-void accept_request(int i)
-{
-    if ((ret = handle_request(&requests[i])) < 0)
-    {
-        fprintf(stderr, "bad request from %s\n", requests[i].username.c_str());
-        FD_CLR(i, &rfd);
-        close(requests[i].conn_fd);
-        free_request(&requests[i]);
-    }
-    else
-    {
-        process_request(&requests[i]);
-    }
-}
-
 int main(int argc, char **argv)
 {
     if (argc != 2)
@@ -518,6 +462,13 @@ int main(int argc, char **argv)
     init_server((unsigned int)atoi(argv[1]));
 
     fprintf(stderr, "\nstarting on %.80s, port %d, fd %d, maxconn %d...\n", svr.hostname, svr.port, svr.listen_fd, maxfd);
+
+    FD_ZERO(&rfd);
+    FD_SET(svr.listen_fd, &rfd);
+
+    cliaddr_size = sizeof(cliaddr);
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 50;
 
     int time = 0;
 
@@ -566,16 +517,29 @@ int main(int argc, char **argv)
 
                         FD_SET(conn_fd, &rfd);
                     }
-                    accept_connection();
                 }
                 else
                 {
-                    accept_request(i);
+                    if ((ret = handle_request(&requests[i])) < 0)
+                    {
+                        fprintf(stderr, "bad request from %s\n", requests[i].username.c_str());
+                        FD_CLR(i, &rfd);
+                        close(requests[i].conn_fd);
+                        free_request(&requests[i]);
+                    }
+                    else
+                    {
+                        std::vector<std::string> commands;
+                        parse_request(&requests[i], commands);
+                        process_request(&requests[i], commands);
+                    }
                 }
             }
             else if (requests[i].remain_bytes)
             {
-                process_request(&requests[i]);
+                std::vector<std::string> commands;
+                parse_request(&requests[i], commands);
+                process_request(&requests[i], commands);
             }
         }
     }
