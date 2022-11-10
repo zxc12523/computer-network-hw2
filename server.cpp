@@ -180,7 +180,6 @@ static void accept_connection()
             if (errno == ENFILE)
             {
                 (void)fprintf(stderr, "out of file descriptor table ... (maxconn %d)\n", maxfd);
-                continue;
             }
             ERR_EXIT("accept");
         }
@@ -206,21 +205,6 @@ void FL_SET(int fd, int flag)
 
     if (fcntl(fd, F_SETFL, val) < 0)
         fprintf(stderr, "set flag err\n");
-}
-
-void accept_request(int i)
-{
-    if ((ret = handle_request(&requests[i])) < 0)
-    {
-        fprintf(stderr, "bad request from %s\n", requests[i].username.c_str());
-        FD_CLR(i, &rfd);
-        close(requests[i].conn_fd);
-        free_request(&requests[i]);
-    }
-    else
-    {
-        process_request(&requests[i]);
-    }
 }
 
 int handle_request(request *req)
@@ -506,6 +490,21 @@ void process_request(request *req)
     }
 
     // fprintf(stderr, "return from process_request\n");
+}
+
+void accept_request(int i)
+{
+    if ((ret = handle_request(&requests[i])) < 0)
+    {
+        fprintf(stderr, "bad request from %s\n", requests[i].username.c_str());
+        FD_CLR(i, &rfd);
+        close(requests[i].conn_fd);
+        free_request(&requests[i]);
+    }
+    else
+    {
+        process_request(&requests[i]);
+    }
 }
 
 int main(int argc, char **argv)
