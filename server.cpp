@@ -41,10 +41,11 @@ typedef struct
     char hostname[512];
     std::string username;
 
+    int fd;
     int conn_fd;
 
-    char buf[1024];
-    size_t buf_len;
+    char comm_buf[1024];
+    size_t comm_buf_len;
 
     char last_buf[1024];
     size_t last_buf_len;
@@ -89,8 +90,8 @@ std::set<std::string> banlist;
 
 static void init_request(request *req)
 {
-    req->conn_fd = -1;
-    req->buf_len = 0;
+    req->fd = -1;
+    req->comm_buf_len = 0;
     req->last_buf_len = 0;
     req->sended_bytes = 0;
     req->max_send_bytes = 0;
@@ -147,6 +148,13 @@ static void init_server(unsigned int port)
     requests[svr.listen_fd].conn_fd = svr.listen_fd;
     strcpy(requests[svr.listen_fd].hostname, svr.hostname);
 
+    FD_ZERO(&rfd);
+    FD_SET(svr.listen_fd, &rfd);
+
+    cliaddr_size = sizeof(cliaddr);
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 50;
+
     int status;
     status = mkdir("./server_database", S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
     // if (status < 0)
@@ -193,18 +201,18 @@ int handle_request(request *req)
         }
     }
     size_t len = p1 - buf + 1;
-    memmove(req->buf, buf, len);
-    req->buf[len - 1] = '\0';
-    req->buf_len = len - 1;
+    memmove(req->comm_buf, buf, len);
+    req->comm_buf[len - 1] = '\0';
+    req->comm_buf_len = len - 1;
 
     fprintf(stderr, "receiving request from %s\n", req->hostname);
-    fprintf(stderr, "len: %ld, request: %s\n", req->buf_len, req->buf);
+    fprintf(stderr, "len: %ld, request: %s\n", req->comm_buf_len, req->comm_buf);
     return 0;
 }
 
 void parse_request(request *req, std::vector<std::string> &commands)
 {
-    std::string tar = req->buf;
+    std::string tar = req->comm_buf;
     std::string delimiter = " ";
 
     std::string tmp;
@@ -278,30 +286,41 @@ void process_request(request *req, std::vector<std::string> &commands)
         const char *path = req->username.c_str();
         chdir(path);
 
-        if ((fd = open(commands[1].c_str(), O_CREAT | O_RDWR | O_TRUNC, 0644)) < 0)
+        if (req->remain_bytes == 0) 
         {
-            ERR_EXIT("open file error");
+            if ((req->fd = open(commands[1].c_str(), O_CREAT | O_RDWR | O_TRUNC, 0644)) < 0)
+            {
+                ERR_EXIT("open file error");
+            }
+
+            recv(req->conn_fd, init_msg, 1024, 0);
+            req->remain_bytes = atoi(init_msg);
+            fprintf(stderr, "file size: %d\n", req->remain_bytes);
+        }
+        
+        memcpy(&working_set, &rfd, sizeof(rfd));
+        if (select(maxfd + 1, &working_set, NULL, NULL, &timeout) < 0)
+        {
+            ERR_EXIT("select");
         }
 
-        recv(req->conn_fd, init_msg, 1024, 0);
-
-        offset = 0;
-        remain_bytes = atoi(init_msg);
-
-        fprintf(stderr, "file size: %d\n", remain_bytes);
-
-        while ((remain_bytes > 0) && ((recv_bytes = recv(req->conn_fd, req->buf, 1024, 0)) > 0))
-        {
+        if (FD_ISSET(req->conn_fd, &working_set) && (req->remain_bytes > 0)) {
+            recv_bytes = recv(req->conn_fd, req->last_buf, 1024, 0);
             // fprintf(stderr, "received bytes: %d bytes\n", remain_bytes);
-            remain_bytes -= recv_bytes;
+            req->remain_bytes -= recv_bytes;
             // fprintf(stderr, "remaining file size: %d\n", remain_bytes);
-            if (write(fd, req->buf, recv_bytes) < 0)
+            if (write(req->fd, req->last_buf, recv_bytes) < 0)
             {
                 ERR_EXIT("write file error");
             }
         }
 
-        close(fd);
+        if (req->remain_bytes == 0) 
+        {   
+            close(req->fd);
+            init_request(req);
+        }
+        
         chdir("..");
     }
     else if (commands[0] == "get")
@@ -341,63 +360,63 @@ void process_request(request *req, std::vector<std::string> &commands)
     }
     else if (commands[0] == "play")
     {
-        // const char *path = req->username.c_str();
-        // chdir(path);
+        const char *path = req->username.c_str();
+        chdir(path);
 
-        // const char *video_name = commands[1].c_str();
+        const char *video_name = commands[1].c_str();
 
-        // VideoCapture cap(video_name);
+        VideoCapture cap(video_name);
 
-        // if (req->remain_bytes)
-        // {
-        //     cap = req->cap;
-        // }
+        if (req->remain_bytes)
+        {
+            cap = req->cap;
+        }
 
-        // int width = cap.get(CAP_PROP_FRAME_WIDTH);
-        // int height = cap.get(CAP_PROP_FRAME_HEIGHT);
-        // int frame_num = cap.get(CAP_PROP_FRAME_COUNT);
+        int width = cap.get(CAP_PROP_FRAME_WIDTH);
+        int height = cap.get(CAP_PROP_FRAME_HEIGHT);
+        int frame_num = cap.get(CAP_PROP_FRAME_COUNT);
 
-        // Mat server_img;
-        // server_img = Mat::zeros(height, width, CV_8UC3);
+        Mat server_img;
+        server_img = Mat::zeros(height, width, CV_8UC3);
 
-        // if (!server_img.isContinuous())
-        // {
-        //     server_img = server_img.clone();
-        // }
+        if (!server_img.isContinuous())
+        {
+            server_img = server_img.clone();
+        }
 
-        // int imgSize = server_img.total() * server_img.elemSize();
+        int imgSize = server_img.total() * server_img.elemSize();
 
-        // req->sended_bytes = 0;
-        // req->max_send_bytes = 1 * imgSize;
+        req->sended_bytes = 0;
+        req->max_send_bytes = 1 * imgSize;
 
-        // if (req->remain_bytes == 0)
-        // {
-        //     req->remain_bytes = frame_num * imgSize;
-        //     fprintf(stderr, "%d %d %d %d %d\n", width, height, imgSize, req->max_send_bytes, frame_num);
-        //     sprintf(init_msg, "%200ld%200ld%200ld%200ld%200ld%23d", width, height, imgSize, req->max_send_bytes, frame_num, 0);
-        //     send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
-        // }
+        if (req->remain_bytes == 0)
+        {
+            req->remain_bytes = frame_num * imgSize;
+            fprintf(stderr, "%d %d %d %d %d\n", width, height, imgSize, req->max_send_bytes, frame_num);
+            sprintf(init_msg, "%200ld%200ld%200ld%200ld%200ld%23d", width, height, imgSize, req->max_send_bytes, frame_num, 0);
+            send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
+        }
 
-        // while (req->sended_bytes < req->max_send_bytes && req->remain_bytes > 0)
-        // {
-        //     cap >> server_img;
-        //     int s = send(req->conn_fd, server_img.data, imgSize, MSG_NOSIGNAL);
-        //     req->sended_bytes += s;
-        //     req->remain_bytes -= s;
-        // }
+        while (req->sended_bytes < req->max_send_bytes && req->remain_bytes > 0)
+        {
+            cap >> server_img;
+            int s = send(req->conn_fd, server_img.data, imgSize, MSG_NOSIGNAL);
+            req->sended_bytes += s;
+            req->remain_bytes -= s;
+        }
 
-        // // fprintf(stderr, "remain bytes: %d\n", req->remain_bytes);
+        // fprintf(stderr, "remain bytes: %d\n", req->remain_bytes);
 
-        // if (req->remain_bytes == 0)
-        // {
-        //     cap.release();
-        // }
-        // else
-        // {
-        //     req->cap = cap;
-        // }
+        if (req->remain_bytes == 0)
+        {
+            cap.release();
+        }
+        else
+        {
+            req->cap = cap;
+        }
 
-        // chdir("..");
+        chdir("..");
     }
     else if (commands[0] == "ban")
     {
@@ -422,7 +441,7 @@ void process_request(request *req, std::vector<std::string> &commands)
             for (int i = 1; i < commands.size(); i++)
                 banlist.erase(commands[i]);
     }
-    else if (commands[0] == "blacklist")
+    else if (commands[0] == "blocklist")
     {
         std::string tmp;
 
@@ -447,8 +466,6 @@ void process_request(request *req, std::vector<std::string> &commands)
         send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
         send(req->conn_fd, invalid_command_msg, strlen(invalid_command_msg) + 1, MSG_NOSIGNAL);
     }
-
-    // fprintf(stderr, "return from process_request\n");
 }
 
 int main(int argc, char **argv)
@@ -462,13 +479,6 @@ int main(int argc, char **argv)
     init_server((unsigned int)atoi(argv[1]));
 
     fprintf(stderr, "\nstarting on %.80s, port %d, fd %d, maxconn %d...\n", svr.hostname, svr.port, svr.listen_fd, maxfd);
-
-    FD_ZERO(&rfd);
-    FD_SET(svr.listen_fd, &rfd);
-
-    cliaddr_size = sizeof(cliaddr);
-    timeout.tv_sec = 0;
-    timeout.tv_usec = 50;
 
     int time = 0;
 
@@ -518,6 +528,12 @@ int main(int argc, char **argv)
                         FD_SET(conn_fd, &rfd);
                     }
                 }
+                else if (requests[i].remain_bytes)
+                {
+                    std::vector<std::string> commands;
+                    parse_request(&requests[i], commands);
+                    process_request(&requests[i], commands);
+                }
                 else
                 {
                     if ((ret = handle_request(&requests[i])) < 0)
@@ -534,12 +550,6 @@ int main(int argc, char **argv)
                         process_request(&requests[i], commands);
                     }
                 }
-            }
-            else if (requests[i].remain_bytes)
-            {
-                std::vector<std::string> commands;
-                parse_request(&requests[i], commands);
-                process_request(&requests[i], commands);
             }
         }
     }
