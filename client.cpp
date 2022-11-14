@@ -209,71 +209,72 @@ void process_command()
     }
     else if (commands[0] == "play")
     {
-        // Mat client_img;
-        // int width, height, imgSize, maxBytes, frame_num;
+        Mat client_img;
+        int width, height, imgSize, maxBytes, frame_num;
 
-        // send(sockfd, command, 1024, 0);
-        // recv(sockfd, init_msg, 1024, 0);
+        send(sockfd, command, 1024, 0);
+        recv(sockfd, init_msg, 1024, 0);
 
-        // if (strcmp(init_msg, "doesn't exist.\n") == 0)
-        // {
-        //     fprintf(stderr, "%s doesn't exist.\n", commands[1].c_str());
-        //     return;
-        // }
+        if (strcmp(init_msg, "doesn't exist.\n") == 0)
+        {
+            fprintf(stderr, "%s doesn't exist.\n", commands[1].c_str());
+            return;
+        }
 
-        // fprintf(stderr, "playing the video...\n");
+        fprintf(stderr, "playing the video...\n");
 
-        // width = atoi(init_msg);
-        // height = atoi(init_msg + 200);
-        // imgSize = atoi(init_msg + 400);
-        // maxBytes = atoi(init_msg + 600);
-        // frame_num = atoi(init_msg + 800);
+        width = atoi(init_msg);
+        height = atoi(init_msg + 200);
+        imgSize = atoi(init_msg + 400);
+        maxBytes = atoi(init_msg + 600);
+        frame_num = atoi(init_msg + 800);
 
-        // remain_bytes = frame_num * imgSize;
+        remain_bytes = frame_num * imgSize;
 
-        // client_img = Mat::zeros(height, width, CV_8UC3);
+        client_img = Mat::zeros(height, width, CV_8UC3);
 
-        // if (!client_img.isContinuous())
-        // {
-        //     client_img = client_img.clone();
-        // }
+        if (!client_img.isContinuous())
+        {
+            client_img = client_img.clone();
+        }
 
-        // uchar *iptr = client_img.data;
-        // char buffer[maxBytes];
+        uchar *iptr = client_img.data;
+        char buffer[maxBytes];
 
-        // int flag = 1;
-        // int copy_from = 0;
+        int flag = 1;
+        int copy_from = 0;
 
-        // while (flag && (remain_bytes > 0) && ((recv_bytes = recv(sockfd, buffer + copy_from, maxBytes - copy_from, 0)) > 0))
-        // {
-        //     copy_from += recv_bytes;
-        //     remain_bytes -= recv_bytes;
+        while (flag && (remain_bytes > 0) && ((recv_bytes = recv(sockfd, buffer + copy_from, maxBytes - copy_from, 0)) > 0))
+        {
+            copy_from += recv_bytes;
+            remain_bytes -= recv_bytes;
 
-        //     if (copy_from == maxBytes)
-        //     {
-        //         copy_from = 0;
-        //         for (int i = 0; i < maxBytes / imgSize; i++)
-        //         {
-        //             memcpy(iptr, buffer + copy_from, imgSize);
-        //             imshow("Video", client_img);
-        //             copy_from += imgSize;
-        //             char c = (char)waitKey(33.3333);
-        //             if (c == 27)
-        //             {
-        //                 flag = 0;
-        //                 break;
-        //             }
-        //         }
-        //         copy_from = 0;
-        //     }
-        // }
+            if (copy_from == maxBytes)
+            {
+                copy_from = 0;
+                for (int i = 0; i < maxBytes / imgSize; i++)
+                {
+                    memcpy(iptr, buffer + copy_from, imgSize);
+                    imshow("Video", client_img);
+                    copy_from += imgSize;
+                    char c = (char)waitKey(33.3333);
+                    if (c == 27)
+                    {
+                        flag = 0;
+                        send(sockfd, "terminate video.\n\0", 18, MSG_NOSIGNAL);
+                        break;
+                    }
+                }
+                copy_from = 0;
+            }
+        }
 
-        // destroyAllWindows();
+        destroyAllWindows();
 
-        // while ((remain_bytes > 0) && ((recv_bytes = recv(sockfd, buffer, maxBytes, 0)) > 0))
-        // {
-        //     remain_bytes -= recv_bytes;
-        // }
+        while ((remain_bytes > 0) && ((recv_bytes = recv(sockfd, buffer, maxBytes, 0)) > 0))
+        {
+            remain_bytes -= recv_bytes;
+        }
     }
     else
     {

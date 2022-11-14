@@ -351,7 +351,9 @@ void process_request(request *req)
             ERR_EXIT("select");
         }
 
-        if (FD_ISSET(req->conn_fd, &working_set) && (req->remain_bytes > 0) && (recv_bytes = recv(req->conn_fd, req->last_buf, 1024, 0)) > 0)
+        if (FD_ISSET(req->conn_fd, &working_set) \
+        && (req->remain_bytes > 0) \
+        && (recv_bytes = recv(req->conn_fd, req->last_buf, 1024, 0)) > 0)
         {
             req->remain_bytes -= recv_bytes;
             fprintf(stderr, "remain bytes: %d\n", req->remain_bytes);
@@ -405,7 +407,9 @@ void process_request(request *req)
             fprintf(stderr, "file size: %d\n", req->remain_bytes);
         }
 
-        if ((req->remain_bytes > 0) && (req->last_buf_len = read(req->fd, req->last_buf, 1024)) > 0 && (req->sended_bytes = send(req->conn_fd, req->last_buf, req->last_buf_len, MSG_NOSIGNAL)) > 0)
+        if ((req->remain_bytes > 0) \
+         && (req->last_buf_len = read(req->fd, req->last_buf, 1024)) > 0 \
+         && (req->sended_bytes = send(req->conn_fd, req->last_buf, req->last_buf_len, MSG_NOSIGNAL)) > 0)
         {
             req->remain_bytes -= req->sended_bytes;
             fprintf(stderr, "remaining file size: %d\n", req->remain_bytes);
@@ -427,63 +431,77 @@ void process_request(request *req)
     }
     else if (commands[0] == "play")
     {
-        // const char *path = req->username.c_str();
-        // chdir(path);
+        const char *path = req->username.c_str();
+        chdir(path);
 
-        // const char *video_name = commands[1].c_str();
+        const char *video_name = commands[1].c_str();
 
-        // VideoCapture cap(video_name);
+        VideoCapture cap(video_name);
 
-        // if (req->remain_bytes)
-        // {
-        //     cap = req->cap;
-        // }
+        if (req->remain_bytes)
+        {
+            cap = req->cap;
+        }
 
-        // int width = cap.get(CAP_PROP_FRAME_WIDTH);
-        // int height = cap.get(CAP_PROP_FRAME_HEIGHT);
-        // int frame_num = cap.get(CAP_PROP_FRAME_COUNT);
+        int width = cap.get(CAP_PROP_FRAME_WIDTH);
+        int height = cap.get(CAP_PROP_FRAME_HEIGHT);
+        int frame_num = cap.get(CAP_PROP_FRAME_COUNT);
 
-        // Mat server_img;
-        // server_img = Mat::zeros(height, width, CV_8UC3);
+        Mat server_img;
+        server_img = Mat::zeros(height, width, CV_8UC3);
 
-        // if (!server_img.isContinuous())
-        // {
-        //     server_img = server_img.clone();
-        // }
+        if (!server_img.isContinuous())
+        {
+            server_img = server_img.clone();
+        }
 
-        // int imgSize = server_img.total() * server_img.elemSize();
+        int imgSize = server_img.total() * server_img.elemSize();
 
-        // req->sended_bytes = 0;
-        // req->max_send_bytes = 1 * imgSize;
+        req->sended_bytes = 0;
+        req->max_send_bytes = 1 * imgSize;
 
-        // if (req->remain_bytes == 0)
-        // {
-        //     req->remain_bytes = frame_num * imgSize;
-        //     fprintf(stderr, "%d %d %d %d %d\n", width, height, imgSize, req->max_send_bytes, frame_num);
-        //     sprintf(init_msg, "%200ld%200ld%200ld%200ld%200ld%23d", width, height, imgSize, req->max_send_bytes, frame_num, 0);
-        //     send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
-        // }
+        if (req->remain_bytes == 0)
+        {
+            req->remain_bytes = frame_num * imgSize;
+            fprintf(stderr, "%d %d %d %d %d\n", width, height, imgSize, req->max_send_bytes, frame_num);
+            sprintf(init_msg, "%200ld%200ld%200ld%200ld%200ld%23d", width, height, imgSize, req->max_send_bytes, frame_num, 0);
+            send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
+        }
 
-        // while (req->sended_bytes < req->max_send_bytes && req->remain_bytes > 0)
-        // {
-        //     cap >> server_img;
-        //     int s = send(req->conn_fd, server_img.data, imgSize, MSG_NOSIGNAL);
-        //     req->sended_bytes += s;
-        //     req->remain_bytes -= s;
-        // }
+        while (req->sended_bytes < req->max_send_bytes && req->remain_bytes > 0)
+        {
+            cap >> server_img;
+            int s = send(req->conn_fd, server_img.data, imgSize, MSG_NOSIGNAL);
+            req->sended_bytes += s;
+            req->remain_bytes -= s;
+        }
 
-        // // fprintf(stderr, "remain bytes: %d\n", req->remain_bytes);
+        memcpy(&working_set, &rfd, sizeof(rfd));
+        if (select(maxfd + 1, &working_set, NULL, NULL, &timeout) < 0)
+        {
+            ERR_EXIT("select");
+        }
 
-        // if (req->remain_bytes == 0)
-        // {
-        //     cap.release();
-        // }
-        // else
-        // {
-        //     req->cap = cap;
-        // }
+        if (FD_ISSET(req->conn_fd, &working_set) \
+        && (req->remain_bytes > 0) \
+        && (recv_bytes = recv(req->conn_fd, req->last_buf, 1024, 0)) > 0 \
+        && strcmp(req->last_buf, "terminate video.\n") == 0)
+        {
+            cap.release();
+            init_request(req);
+            
+        }
+        else if (req->remain_bytes == 0)
+        {
+            cap.release();
+            init_request(req);
+        }
+        else
+        {
+            req->cap = cap;
+        }
 
-        // chdir("..");
+        chdir("..");
     }
     else if (commands[0] == "ban")
     {
