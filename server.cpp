@@ -54,6 +54,8 @@ typedef struct
     long long max_send_bytes;
     long long remain_bytes;
 
+    bool working;
+
     off_t offset;
 
     // VideoCapture cap;
@@ -81,6 +83,7 @@ char end_msg[1024] = "sending the ending message\n";
 char permission_denied_msg[1024] = "permisson denied\n\0";
 char invalid_command_msg[1024] = "invalid commond\n\0";
 char greeting_msg[1024] = "greeting\n\0";
+char not_exist[1024] = "doesn't exist.\n\0";
 
 char file_size[1024];
 struct stat file_stat;
@@ -97,6 +100,7 @@ static void init_request(request *req)
     req->sended_bytes = 0;
     req->max_send_bytes = 0;
     req->remain_bytes = 0;
+    req->working = 0;
     req->offset = 0;
 }
 
@@ -168,6 +172,42 @@ static void init_server(unsigned int port)
     return;
 }
 
+void accept_connection()
+{
+    conn_fd = accept(svr.listen_fd, (struct sockaddr *)&cliaddr, (socklen_t *)&cliaddr_size);
+    if (conn_fd < 0)
+    {
+        printf("errno: %d\n", errno);
+        if (errno == EINTR || errno == EAGAIN)
+        {
+            fprintf(stderr, "EAGAIN\n");
+        }
+        else
+        {
+            if (errno == ENFILE)
+            {
+                fprintf(stderr, "out of file descriptor table ... (maxconn %d)\n", maxfd);
+            }
+            ERR_EXIT("accept");
+        }
+    }
+    else
+    {
+        requests[conn_fd].conn_fd = conn_fd;
+        strcpy(requests[conn_fd].hostname, inet_ntoa(cliaddr.sin_addr));
+        fprintf(stderr, "accepting new connection... fd %d from %s\n", requests[conn_fd].conn_fd, requests[conn_fd].hostname);
+        FD_SET(conn_fd, &rfd);
+    }
+}
+
+void terminate_connection(int i)
+{
+    fprintf(stderr, "bad request from %s\n", requests[i].username.c_str());
+    FD_CLR(i, &rfd);
+    close(requests[i].conn_fd);
+    free_request(&requests[i]);
+}
+
 void FL_SET(int fd, int flag)
 {
     int val;
@@ -229,8 +269,12 @@ void parse_request(request *req, std::vector<std::string> &commands)
     commands.push_back(tar);
 }
 
-void process_request(request *req, std::vector<std::string> &commands)
+void process_request(request *req)
 {
+
+    std::vector<std::string> commands;
+    parse_request(req, commands);
+
     if (commands[0] == "greeting")
     {
         if (banlist.find(req->username) == banlist.end())
@@ -297,6 +341,7 @@ void process_request(request *req, std::vector<std::string> &commands)
 
             recv(req->conn_fd, init_msg, 1024, 0);
             req->remain_bytes = atoi(init_msg);
+            req->working = 1;
             fprintf(stderr, "file size: %d\n", req->remain_bytes);
         }
 
@@ -306,12 +351,10 @@ void process_request(request *req, std::vector<std::string> &commands)
             ERR_EXIT("select");
         }
 
-        if (FD_ISSET(req->conn_fd, &working_set) && (req->remain_bytes > 0))
+        if (FD_ISSET(req->conn_fd, &working_set) && (req->remain_bytes > 0) && (recv_bytes = recv(req->conn_fd, req->last_buf, 1024, 0)) > 0)
         {
-            recv_bytes = recv(req->conn_fd, req->last_buf, 1024, 0);
-            // fprintf(stderr, "received bytes: %d bytes\n", remain_bytes);
             req->remain_bytes -= recv_bytes;
-            // fprintf(stderr, "remaining file size: %d\n", remain_bytes);
+            fprintf(stderr, "remain bytes: %d\n", req->remain_bytes);
             if (write(req->fd, req->last_buf, recv_bytes) < 0)
             {
                 ERR_EXIT("write file error");
@@ -322,6 +365,12 @@ void process_request(request *req, std::vector<std::string> &commands)
         {
             close(req->fd);
             init_request(req);
+        }
+
+        if (recv_bytes == 0)
+        {
+            close(req->fd);
+            terminate_connection(req->conn_fd);
         }
 
         chdir("..");
@@ -337,7 +386,9 @@ void process_request(request *req, std::vector<std::string> &commands)
         {
             if ((req->fd = open(filename, O_RDONLY)) < 0)
             {
-                ERR_EXIT("open");
+                fprintf(stderr, "file: %s doesn't exist.\n", commands[1].c_str());
+                send(req->conn_fd, not_exist, strlen(not_exist) + 1, MSG_NOSIGNAL);
+                return;
             }
 
             if (fstat(req->fd, &file_stat) < 0)
@@ -350,13 +401,12 @@ void process_request(request *req, std::vector<std::string> &commands)
 
             req->offset = 0;
             req->remain_bytes = file_stat.st_size;
+            req->working = 1;
+            fprintf(stderr, "file size: %d\n", req->remain_bytes);
         }
 
-        fprintf(stderr, "file size: %d\n", req->remain_bytes);
-
-        if ((req->remain_bytes > 0) && ((req->sended_bytes = sendfile(req->conn_fd, req->fd, &req->offset, BUFSIZ)) > 0))
+        if ((req->remain_bytes > 0) && (req->last_buf_len = read(req->fd, req->last_buf, 1024)) > 0 && (req->sended_bytes = send(req->conn_fd, req->last_buf, req->last_buf_len, MSG_NOSIGNAL)) > 0)
         {
-            fprintf(stderr, "sent bytes: %d bytes\n", req->sended_bytes);
             req->remain_bytes -= req->sended_bytes;
             fprintf(stderr, "remaining file size: %d\n", req->remain_bytes);
         }
@@ -365,6 +415,12 @@ void process_request(request *req, std::vector<std::string> &commands)
         {
             close(req->fd);
             init_request(req);
+        }
+
+        if (req->sended_bytes < 0)
+        {
+            close(req->fd);
+            terminate_connection(req->conn_fd);
         }
 
         chdir("..");
@@ -431,26 +487,60 @@ void process_request(request *req, std::vector<std::string> &commands)
     }
     else if (commands[0] == "ban")
     {
-        sprintf(init_msg, "%01023ld", req->username != "admin" ? strlen(permission_denied_msg) + 1 : 0);
+        std::string tmp;
+
+        for (int i = 1; i < commands.size(); i++)
+        {
+            if (commands[i] == "admin")
+                tmp += "You cannot ban yourself!\n";
+            else if (banlist.find(commands[i]) == banlist.end())
+                tmp += "Ban " + commands[i] + " Successfully!\n";
+            else
+                tmp += "User " + commands[i] + " is already on the blocklist!\n";
+        }
+        tmp += '\0';
+
+        sprintf(init_msg, "%01023ld", req->username != "admin" ? strlen(permission_denied_msg) + 1 : tmp.size() + 1);
         send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
 
         if (req->username != "admin")
+        {
             send(req->conn_fd, permission_denied_msg, strlen(permission_denied_msg) + 1, MSG_NOSIGNAL);
+        }
         else
+        {
+            send(req->conn_fd, tmp.c_str(), tmp.size() + 1, MSG_NOSIGNAL);
             for (int i = 1; i < commands.size(); i++)
                 if (commands[i] != "admin")
                     banlist.insert(commands[i]);
+        }
     }
     else if (commands[0] == "unban")
     {
-        sprintf(init_msg, "%01023ld", req->username != "admin" ? strlen(permission_denied_msg) + 1 : 0);
+        std::string tmp;
+
+        for (int i = 1; i < commands.size(); i++)
+        {
+            if (banlist.find(commands[i]) == banlist.end())
+                tmp += "User " + commands[i] + " is not on the blocklist!\n";
+            else
+                tmp += "Successfully removed " + commands[i] + " from the blocklist!\n";
+        }
+        tmp += '\0';
+
+        sprintf(init_msg, "%01023ld", req->username != "admin" ? strlen(permission_denied_msg) + 1 : tmp.size() + 1);
         send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
 
         if (req->username != "admin")
+        {
             send(req->conn_fd, permission_denied_msg, strlen(permission_denied_msg) + 1, MSG_NOSIGNAL);
+        }
         else
+        {
+            send(req->conn_fd, tmp.c_str(), tmp.size() + 1, MSG_NOSIGNAL);
             for (int i = 1; i < commands.size(); i++)
                 banlist.erase(commands[i]);
+        }
     }
     else if (commands[0] == "blocklist")
     {
@@ -458,8 +548,7 @@ void process_request(request *req, std::vector<std::string> &commands)
 
         for (auto i : banlist)
         {
-            tmp += i;
-            tmp += '\n';
+            tmp += i + '\n';
         }
         tmp += '\0';
 
@@ -495,10 +584,8 @@ int main(int argc, char **argv)
 
     while (1)
     {
-        if ((time++) % 200000 == 0)
-            fprintf(stderr, "time: %d\n", time / 200000);
-
         memcpy(&working_set, &rfd, sizeof(rfd));
+
         if (select(maxfd + 1, &working_set, NULL, NULL, &timeout) < 0)
         {
             ERR_EXIT("select");
@@ -506,65 +593,25 @@ int main(int argc, char **argv)
 
         for (int i = 0; i < maxfd; i++)
         {
-            if (FD_ISSET(i, &working_set))
+            if (FD_ISSET(i, &working_set) || requests[i].working)
             {
                 // fprintf(stderr, "working_set fd: %d ready\n", i);
                 if (i == svr.listen_fd)
                 {
-                    conn_fd = accept(svr.listen_fd, (struct sockaddr *)&cliaddr, (socklen_t *)&cliaddr_size);
-                    if (conn_fd < 0)
-                    {
-                        printf("errno: %d\n", errno);
-                        if (errno == EINTR || errno == EAGAIN)
-                        {
-                            fprintf(stderr, "EAGAIN\n");
-                        }
-                        else
-                        {
-                            if (errno == ENFILE)
-                            {
-                                (void)fprintf(stderr, "out of file descriptor table ... (maxconn %d)\n", maxfd);
-                                continue;
-                            }
-                            ERR_EXIT("accept");
-                        }
-                    }
-                    else
-                    {
-                        requests[conn_fd].conn_fd = conn_fd;
-                        strcpy(requests[conn_fd].hostname, inet_ntoa(cliaddr.sin_addr));
-                        fprintf(stderr, "accepting new connection... fd %d from %s\n", requests[conn_fd].conn_fd, requests[conn_fd].hostname);
-                        FD_SET(conn_fd, &rfd);
-                    }
+                    accept_connection();
                 }
-                else if (requests[i].remain_bytes)
+                else if (requests[i].working)
                 {
-                    std::vector<std::string> commands;
-                    parse_request(&requests[i], commands);
-                    process_request(&requests[i], commands);
+                    process_request(&requests[i]);
+                }
+                else if ((ret = handle_request(&requests[i])) < 0)
+                {
+                    terminate_connection(i);
                 }
                 else
                 {
-                    if ((ret = handle_request(&requests[i])) < 0)
-                    {
-                        fprintf(stderr, "bad request from %s\n", requests[i].username.c_str());
-                        FD_CLR(i, &rfd);
-                        close(requests[i].conn_fd);
-                        free_request(&requests[i]);
-                    }
-                    else
-                    {
-                        std::vector<std::string> commands;
-                        parse_request(&requests[i], commands);
-                        process_request(&requests[i], commands);
-                    }
+                    process_request(&requests[i]);
                 }
-            }
-            else if (requests[i].remain_bytes)
-            {
-                std::vector<std::string> commands;
-                parse_request(&requests[i], commands);
-                process_request(&requests[i], commands);
             }
         }
     }

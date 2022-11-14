@@ -130,17 +130,20 @@ void parse_command(char *command, std::vector<std::string> &commands)
     commands.push_back(tar);
 }
 
-void process_command(std::vector<std::string> commands)
+void process_command()
 {
+    std::vector<std::string> commands;
+    parse_command(command, commands);
+    command[strlen(command)] = '\n';
+
     if (commands[0] == "put")
     {
         const char *filename = commands[1].c_str();
 
-        fprintf(stderr, "filename: %s\n", filename);
-
         if ((fd = open(filename, O_RDONLY)) < 0)
         {
-            ERR_EXIT("open");
+            fprintf(stderr, "%s doesn't exist.\n", filename);
+            return;
         }
 
         if (fstat(fd, &file_stat) < 0)
@@ -148,13 +151,16 @@ void process_command(std::vector<std::string> commands)
             ERR_EXIT("open file error");
         }
 
+        fprintf(stderr, "putting %s...\n", filename);
+
+        send(sockfd, command, 1024, 0);
         sprintf(init_msg, "%01023ld", file_stat.st_size);
         send(sockfd, init_msg, 1024, 0);
 
         offset = 0;
         remain_bytes = file_stat.st_size;
 
-        fprintf(stderr, "file size: %ld\n", remain_bytes);
+        // fprintf(stderr, "file size: %ld\n", remain_bytes);
 
         while ((remain_bytes > 0) && ((sent_bytes = sendfile(sockfd, fd, &offset, BUFSIZ)) > 0))
         {
@@ -167,23 +173,32 @@ void process_command(std::vector<std::string> commands)
     }
     else if (commands[0] == "get")
     {
+        send(sockfd, command, 1024, 0);
+        recv(sockfd, init_msg, 1024, 0);
+
+        if (strcmp(init_msg, "doesn't exist.\n") == 0)
+        {
+            fprintf(stderr, "%s doesn't exist.\n", commands[1].c_str());
+            return;
+        }
+
+        fprintf(stderr, "getting %s...\n", commands[1].c_str());
+
         if ((fd = open(commands[1].c_str(), O_CREAT | O_RDWR | O_TRUNC, 0644)) < 0)
         {
             ERR_EXIT("open file error");
         }
 
-        recv(sockfd, init_msg, 1024, 0);
-
         offset = 0;
         remain_bytes = atoi(init_msg);
 
-        fprintf(stderr, "file size: %ld\n", remain_bytes);
+        // fprintf(stderr, "file size: %ld\n", remain_bytes);
 
         while ((remain_bytes > 0) && ((recv_bytes = recv(sockfd, buf, 1024, 0)) > 0))
         {
-            fprintf(stderr, "received bytes: %ld bytes\n", recv_bytes);
+            // fprintf(stderr, "received bytes: %ld bytes\n", recv_bytes);
             remain_bytes -= recv_bytes;
-            fprintf(stderr, "remaining file size: %ld\n", remain_bytes);
+            // fprintf(stderr, "remaining file size: %ld\n", remain_bytes);
             if (write(fd, buf, recv_bytes) < 0)
             {
                 ERR_EXIT("write file error");
@@ -197,7 +212,17 @@ void process_command(std::vector<std::string> commands)
         // Mat client_img;
         // int width, height, imgSize, maxBytes, frame_num;
 
+        // send(sockfd, command, 1024, 0);
         // recv(sockfd, init_msg, 1024, 0);
+
+        // if (strcmp(init_msg, "doesn't exist.\n") == 0)
+        // {
+        //     fprintf(stderr, "%s doesn't exist.\n", commands[1].c_str());
+        //     return;
+        // }
+
+        // fprintf(stderr, "playing the video...\n");
+
         // width = atoi(init_msg);
         // height = atoi(init_msg + 200);
         // imgSize = atoi(init_msg + 400);
@@ -252,6 +277,7 @@ void process_command(std::vector<std::string> commands)
     }
     else
     {
+        send(sockfd, command, 1024, 0);
         recv(sockfd, init_msg, 1024, 0);
 
         offset = 0;
@@ -259,9 +285,9 @@ void process_command(std::vector<std::string> commands)
 
         while ((remain_bytes > 0) && ((recv_bytes = recv(sockfd, buf, 1024, 0)) > 0))
         {
-            fprintf(stderr, "received bytes: %ld bytes\n", recv_bytes);
+            // fprintf(stderr, "received bytes: %ld bytes\n", recv_bytes);
             remain_bytes -= recv_bytes;
-            fprintf(stderr, "remaining file size: %ld\n", remain_bytes);
+            // fprintf(stderr, "remaining file size: %ld\n", remain_bytes);
             fprintf(stderr, "%s", buf);
         }
     }
@@ -292,10 +318,7 @@ int main(int argc, char **argv)
 
         if (strcmp(init_msg, "greeting\n") == 0)
         {
-            send(sockfd, command, 1024, 0);
-            std::vector<std::string> commands;
-            parse_command(command, commands);
-            process_command(commands);
+            process_command();
         }
         else
         {
