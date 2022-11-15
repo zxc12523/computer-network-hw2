@@ -18,8 +18,8 @@
 #include <vector>
 #include <iostream>
 
-// #include "opencv2/opencv.hpp"
-// using namespace cv;
+#include "opencv2/opencv.hpp"
+using namespace cv;
 
 #define ERR_EXIT(a) \
     do              \
@@ -239,42 +239,40 @@ void process_command()
         }
 
         uchar *iptr = client_img.data;
-        char buffer[maxBytes];
+        char buffer[imgSize];
 
-        int flag = 1;
         int copy_from = 0;
 
-        while (flag && (remain_bytes > 0) && ((recv_bytes = recv(sockfd, buffer + copy_from, maxBytes - copy_from, 0)) > 0))
+        while ((remain_bytes > 0) \
+        && send(sockfd, "send video package.\n\0", 21, MSG_NOSIGNAL) > 0 \
+        && ((recv_bytes = recv(sockfd, buffer + copy_from, imgSize - copy_from, 0)) > 0))
         {
             copy_from += recv_bytes;
             remain_bytes -= recv_bytes;
 
-            if (copy_from == maxBytes)
+            fprintf(stderr, "%d %d\n", copy_from, imgSize);
+
+            if (copy_from == imgSize)
             {
                 copy_from = 0;
-                for (int i = 0; i < maxBytes / imgSize; i++)
+                memcpy(iptr, buffer, imgSize);
+                imshow("Video", client_img);
+                char c = (char)waitKey(33.3333);
+                if (c == 27)
                 {
-                    memcpy(iptr, buffer + copy_from, imgSize);
-                    imshow("Video", client_img);
-                    copy_from += imgSize;
-                    char c = (char)waitKey(33.3333);
-                    if (c == 27)
-                    {
-                        flag = 0;
-                        send(sockfd, "terminate video.\n\0", 18, MSG_NOSIGNAL);
-                        break;
-                    }
+                    send(sockfd, "terminate video.\n\0", 18, MSG_NOSIGNAL);
+                    break;
                 }
-                copy_from = 0;
             }
         }
 
         destroyAllWindows();
 
-        while ((remain_bytes > 0) && ((recv_bytes = recv(sockfd, buffer, maxBytes, 0)) > 0))
-        {
-            remain_bytes -= recv_bytes;
-        }
+        // while (1)
+        // {
+        //     (remain_bytes > 0) && ((recv_bytes = recv(sockfd, buffer, maxBytes, 0)) > 0)
+        //     remain_bytes -= recv_bytes;
+        // }
     }
     else
     {
