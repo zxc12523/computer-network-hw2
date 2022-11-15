@@ -86,7 +86,7 @@ int ret;
 char init_msg[1024];
 char end_msg[1024] = "sending the ending message\n";
 char permission_denied_msg[1024] = "permisson denied\n\0";
-char invalid_command_msg[1024] = "invalid commond\n\0";
+char invalid_command_msg[1024] = "Commond not found\n\0";
 char greeting_msg[1024] = "greeting\n\0";
 char not_exist[1024] = "doesn't exist.\n\0";
 
@@ -254,7 +254,7 @@ int handle_request(request *req)
     req->comm_buf[len - 1] = '\0';
     req->comm_buf_len = len - 1;
 
-    fprintf(stderr, "receiving request from %s\n", req->hostname);
+    fprintf(stderr, "receiving request from %s\n", req->username.c_str());
     fprintf(stderr, "len: %ld, request: %s\n", req->comm_buf_len, req->comm_buf);
     return 0;
 }
@@ -286,8 +286,7 @@ void process_request(request *req)
     {
         if (banlist.find(req->username) == banlist.end())
         {
-            // fprintf(stderr, "greeting: %s\n", req->username.c_str());
-            // fprintf(stderr, "len: %d msg: %s", strlen(greeting_msg) + 1, greeting_msg);
+            fprintf(stderr, "greeting: %s\n", req->username.c_str());
             if (send(req->conn_fd, greeting_msg, strlen(greeting_msg) + 1, MSG_NOSIGNAL) < 0) 
             {
                 terminate_connection(req->conn_fd);
@@ -295,7 +294,7 @@ void process_request(request *req)
         }
         else
         {
-            // fprintf(stderr, "denied: %s\n", req->username.c_str());
+            fprintf(stderr, "denied: %s\n", req->username.c_str());
             if (send(req->conn_fd, permission_denied_msg, strlen(permission_denied_msg) + 1, MSG_NOSIGNAL) < 0) 
             {
                 terminate_connection(req->conn_fd);
@@ -309,6 +308,8 @@ void process_request(request *req)
         const char *path = req->username.c_str();
 
         mkdir(path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+
+        fprintf(stdout, "Accept a new connection on socket %d. Login as %s.\n", req->conn_fd, req->username.c_str());
     }
     else if (commands[0] == "ls")
     {
@@ -376,7 +377,7 @@ void process_request(request *req)
         && (recv_bytes = recv(req->conn_fd, req->last_buf, 1024, 0)) > 0)
         {
             req->remain_bytes -= recv_bytes;
-            fprintf(stderr, "remain bytes: %d\n", req->remain_bytes);
+            // fprintf(stderr, "remain bytes: %d\n", req->remain_bytes);
             if (write(req->fd, req->last_buf, recv_bytes) < 0)
             {
                 ERR_EXIT("write file error");
@@ -408,7 +409,7 @@ void process_request(request *req)
         {
             if ((req->fd = open(filename, O_RDONLY)) < 0)
             {
-                fprintf(stderr, "file: %s doesn't exist.\n", commands[1].c_str());
+                // fprintf(stderr, "file: %s doesn't exist.\n", commands[1].c_str());
                 if (send(req->conn_fd, not_exist, strlen(not_exist) + 1, MSG_NOSIGNAL) < 0 ) 
                 {
                     terminate_connection(req->conn_fd);
@@ -440,7 +441,7 @@ void process_request(request *req)
          && (req->sent_bytes = send(req->conn_fd, req->last_buf, req->last_buf_len, MSG_NOSIGNAL)) > 0)
         {
             req->remain_bytes -= req->sent_bytes;
-            fprintf(stderr, "remaining file size: %d\n", req->remain_bytes);
+            // fprintf(stderr, "remaining file size: %d\n", req->remain_bytes);
         }
 
         if (req->remain_bytes == 0)
@@ -488,13 +489,11 @@ void process_request(request *req)
 
             cap >> req->img;
 
-            fprintf(stderr, "init\n");
             req->working = 1;
             req->cap = cap;
             req->remain_bytes = frame_num * imgSize;
             req->img_size = imgSize;
             req->max_send_bytes = imgSize;
-            fprintf(stderr, "init\n");
         }
         else {
             cap = req->cap;
@@ -509,7 +508,7 @@ void process_request(request *req)
         if (FD_ISSET(req->conn_fd, &working_set) && (recv_bytes = recv(req->conn_fd, req->last_buf, 1024, 0)) > 0)
         {
             if (strcmp(req->last_buf, "send video package.\n") == 0) {
-                // fprintf(stderr, "sending video pakcage\n");
+                // fprintf(stderr, "sending video pakcage %d\n", req->package++);
 
                 req->sent_bytes = send(req->conn_fd, req->img.data + req->offset, \
                 min(req->max_send_bytes, (long long)(req->img_size - req->offset)), MSG_NOSIGNAL);

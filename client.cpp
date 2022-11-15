@@ -136,13 +136,15 @@ void process_command()
     parse_command(command, commands);
     command[strlen(command)] = '\n';
 
+    // fprintf(stderr, "command: %s", command);
+
     if (commands[0] == "put")
     {
         const char *filename = commands[1].c_str();
 
         if ((fd = open(filename, O_RDONLY)) < 0)
         {
-            fprintf(stderr, "%s doesn't exist.\n", filename);
+            fprintf(stdout, "%s doesn't exist.\n", filename);
             return;
         }
 
@@ -151,7 +153,7 @@ void process_command()
             ERR_EXIT("open file error");
         }
 
-        fprintf(stderr, "putting %s...\n", filename);
+        fprintf(stdout, "putting %s...\n", filename);
 
         send(sockfd, command, 1024, 0);
         sprintf(init_msg, "%01023ld", file_stat.st_size);
@@ -178,11 +180,11 @@ void process_command()
 
         if (strcmp(init_msg, "doesn't exist.\n") == 0)
         {
-            fprintf(stderr, "%s doesn't exist.\n", commands[1].c_str());
+            fprintf(stdout, "%s doesn't exist.\n", commands[1].c_str());
             return;
         }
 
-        fprintf(stderr, "getting %s...\n", commands[1].c_str());
+        fprintf(stdout, "getting %s...\n", commands[1].c_str());
 
         if ((fd = open(commands[1].c_str(), O_CREAT | O_RDWR | O_TRUNC, 0644)) < 0)
         {
@@ -217,11 +219,11 @@ void process_command()
 
         if (strcmp(init_msg, "doesn't exist.\n") == 0)
         {
-            fprintf(stderr, "%s doesn't exist.\n", commands[1].c_str());
+            fprintf(stdout, "%s doesn't exist.\n", commands[1].c_str());
             return;
         }
 
-        fprintf(stderr, "playing the video...\n");
+        fprintf(stdout, "playing the video...\n");
 
         width = atoi(init_msg);
         height = atoi(init_msg + 200);
@@ -242,16 +244,15 @@ void process_command()
         char buffer[imgSize];
 
         int copy_from = 0;
+        int t = 1;
+
+        send(sockfd, "send video package.\n\0", 21, MSG_NOSIGNAL);
 
         while ((remain_bytes > 0) \
-        && send(sockfd, "send video package.\n\0", 21, MSG_NOSIGNAL) > 0 \
         && ((recv_bytes = recv(sockfd, buffer + copy_from, imgSize - copy_from, 0)) > 0))
         {
             copy_from += recv_bytes;
             remain_bytes -= recv_bytes;
-
-            fprintf(stderr, "%d %d\n", copy_from, imgSize);
-
             if (copy_from == imgSize)
             {
                 copy_from = 0;
@@ -263,16 +264,15 @@ void process_command()
                     send(sockfd, "terminate video.\n\0", 18, MSG_NOSIGNAL);
                     break;
                 }
+                else if (t < frame_num){
+                    send(sockfd, "send video package.\n\0", 21, MSG_NOSIGNAL);
+                    // fprintf(stderr, "%d %d %d\n", ++t, copy_from, imgSize);
+                }
             }
         }
 
         destroyAllWindows();
 
-        // while (1)
-        // {
-        //     (remain_bytes > 0) && ((recv_bytes = recv(sockfd, buffer, maxBytes, 0)) > 0)
-        //     remain_bytes -= recv_bytes;
-        // }
     }
     else
     {
@@ -287,7 +287,7 @@ void process_command()
             // fprintf(stderr, "received bytes: %ld bytes\n", recv_bytes);
             remain_bytes -= recv_bytes;
             // fprintf(stderr, "remaining file size: %ld\n", remain_bytes);
-            fprintf(stderr, "%s", buf);
+            fprintf(stdout, "%s", buf);
         }
     }
 }
@@ -302,7 +302,7 @@ int main(int argc, char **argv)
 
     init(argc, argv);
 
-    fprintf(stderr, "username: %s ip: %s port: %s\n", username, ip, port);
+    // fprintf(stderr, "username: %s ip: %s port: %s\n", username, ip, port);
 
     while (1)
     {
