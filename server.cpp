@@ -469,6 +469,18 @@ void process_request(request *req)
 
         if (req->remain_bytes == 0) 
         {
+            if ((req->fd = open(video_name, O_RDONLY)) < 0)
+            {
+                // fprintf(stderr, "file: %s doesn't exist.\n", commands[1].c_str());
+                if (send(req->conn_fd, not_exist, strlen(not_exist) + 1, MSG_NOSIGNAL) < 0 ) 
+                {
+                    terminate_connection(req->conn_fd);
+                }
+                cap.release();
+                chdir("..");
+                return;
+            }
+
             int width = cap.get(CAP_PROP_FRAME_WIDTH);
             int height = cap.get(CAP_PROP_FRAME_HEIGHT);
             int frame_num = cap.get(CAP_PROP_FRAME_COUNT);
