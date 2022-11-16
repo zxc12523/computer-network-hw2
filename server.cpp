@@ -46,8 +46,7 @@ typedef struct
     int conn_fd;
     int package;
 
-    char comm_buf[1024];
-    size_t comm_buf_len;
+    std::string comm_buf;
 
     char last_buf[1024];
     size_t last_buf_len;
@@ -55,6 +54,7 @@ typedef struct
     long long sent_bytes;
     long long max_send_bytes;
     long long remain_bytes;
+    long long recv_bytes;
 
     bool working;
 
@@ -78,11 +78,9 @@ struct timeval timeout;
 
 fd_set rfd, working_set;
 
-int sent_bytes = 0;
-int recv_bytes = 0;
-
 int fd;
 int ret;
+char buf[2097152];
 char init_msg[1024];
 char end_msg[1024] = "sending the ending message\n";
 char permission_denied_msg[1024] = "permisson denied\n\0";
@@ -101,11 +99,11 @@ static void init_request(request *req)
 {
     req->fd = -1;
     req->package = 0;
-    req->comm_buf_len = 0;
     req->last_buf_len = 0;
     req->sent_bytes = 0;
     req->max_send_bytes = 0;
     req->remain_bytes = 0;
+    req->recv_bytes = -1;
     req->working = 0;
     req->offset = 0;
     req->img_size = 0;
@@ -230,7 +228,6 @@ void FL_SET(int fd, int flag)
 int handle_request(request *req)
 {
     int r;
-    char buf[1024];
 
     r = read(req->conn_fd, buf, sizeof(buf));
     if (r <= 0)
@@ -246,16 +243,17 @@ int handle_request(request *req)
         p1 = strstr(buf, "\012");
         if (p1 == NULL)
         {
-            ERR_EXIT("this really should not happen...");
+            fprintf(stderr, "handle request error from socket: %d!\n", req->conn_fd);
+            terminate_connection(req->conn_fd);
+            return -1;
         }
     }
     size_t len = p1 - buf + 1;
-    memmove(req->comm_buf, buf, len);
-    req->comm_buf[len - 1] = '\0';
-    req->comm_buf_len = len - 1;
+    buf[len - 1] = '\0';
+    req->comm_buf = buf;
 
     fprintf(stderr, "receiving request from %s\n", req->username.c_str());
-    fprintf(stderr, "len: %ld, request: %s\n", req->comm_buf_len, req->comm_buf);
+    fprintf(stderr, "len: %ld, request: %s\n", req->comm_buf.size(), req->comm_buf.c_str());
     return 0;
 }
 
@@ -270,7 +268,8 @@ void parse_request(request *req, std::vector<std::string> &commands)
     while ((pos = tar.find(delimiter)) != std::string::npos)
     {
         tmp = tar.substr(0, pos);
-        commands.push_back(tmp);
+        if (tmp.size())
+            commands.push_back(tmp);
         tar.erase(0, pos + delimiter.length());
     }
     commands.push_back(tar);
@@ -321,12 +320,6 @@ void process_request(request *req)
         struct dirent *di;
         DIR *dir = opendir(".");
 
-        if (dir == NULL) // opendir returns NULL if couldn't open directory
-        {
-            write(req->conn_fd, "ERROR: Couldn't open directory", 1024);
-            ERR_EXIT("Couldn't open directory");
-        }
-
         while ((di = readdir(dir)) != NULL)
         {
             tmp += di->d_name;
@@ -374,11 +367,11 @@ void process_request(request *req)
 
         if (FD_ISSET(req->conn_fd, &working_set) \
         && (req->remain_bytes > 0) \
-        && (recv_bytes = recv(req->conn_fd, req->last_buf, 1024, 0)) > 0)
+        && (req->recv_bytes = recv(req->conn_fd, req->last_buf, 1024, 0)) > 0)
         {
-            req->remain_bytes -= recv_bytes;
+            req->remain_bytes -= req->recv_bytes;
             // fprintf(stderr, "remain bytes: %d\n", req->remain_bytes);
-            if (write(req->fd, req->last_buf, recv_bytes) < 0)
+            if (write(req->fd, req->last_buf, req->recv_bytes) < 0)
             {
                 ERR_EXIT("write file error");
             }
@@ -390,7 +383,7 @@ void process_request(request *req)
             init_request(req);
         }
 
-        if (recv_bytes == 0)
+        if (req->recv_bytes == 0)
         {
             close(req->fd);
             terminate_connection(req->conn_fd);
@@ -420,7 +413,7 @@ void process_request(request *req)
 
             if (fstat(req->fd, &file_stat) < 0)
             {
-                ERR_EXIT("open file error");
+                ERR_EXIT("fstat file error");
             }
 
             sprintf(init_msg, "%01023ld", file_stat.st_size);
@@ -469,13 +462,13 @@ void process_request(request *req)
 
         if (req->remain_bytes == 0) 
         {
-            if ((req->fd = open(video_name, O_RDONLY)) < 0)
+            if (access(video_name, F_OK) != 0) 
             {
-                // fprintf(stderr, "file: %s doesn't exist.\n", commands[1].c_str());
                 if (send(req->conn_fd, not_exist, strlen(not_exist) + 1, MSG_NOSIGNAL) < 0 ) 
                 {
                     terminate_connection(req->conn_fd);
                 }
+
                 cap.release();
                 chdir("..");
                 return;
@@ -517,7 +510,7 @@ void process_request(request *req)
             ERR_EXIT("select");
         }
 
-        if (FD_ISSET(req->conn_fd, &working_set) && (recv_bytes = recv(req->conn_fd, req->last_buf, 1024, 0)) > 0)
+        if (FD_ISSET(req->conn_fd, &working_set) && (req->recv_bytes = recv(req->conn_fd, req->last_buf, 1024, 0)) > 0)
         {
             if (strcmp(req->last_buf, "send video package.\n") == 0) {
                 // fprintf(stderr, "sending video pakcage %d\n", req->package++);
@@ -552,6 +545,10 @@ void process_request(request *req)
             }
         }
 
+        if (req->recv_bytes == 0) {
+            terminate_connection(req->conn_fd);
+        }
+
         chdir("..");
     }
     else if (commands[0] == "ban")
@@ -570,19 +567,27 @@ void process_request(request *req)
         tmp += '\0';
 
         sprintf(init_msg, "%01023ld", req->username != "admin" ? strlen(permission_denied_msg) + 1 : tmp.size() + 1);
-        send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
+        req->sent_bytes = send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
 
         if (req->username != "admin")
         {
-            send(req->conn_fd, permission_denied_msg, strlen(permission_denied_msg) + 1, MSG_NOSIGNAL);
+            req->sent_bytes = send(req->conn_fd, permission_denied_msg, strlen(permission_denied_msg) + 1, MSG_NOSIGNAL);
         }
         else
         {
-            send(req->conn_fd, tmp.c_str(), tmp.size() + 1, MSG_NOSIGNAL);
+            req->sent_bytes = send(req->conn_fd, tmp.c_str(), tmp.size() + 1, MSG_NOSIGNAL);
             for (int i = 1; i < commands.size(); i++)
                 if (commands[i] != "admin")
                     banlist.insert(commands[i]);
         }
+
+        if (req->sent_bytes < 0) {
+            terminate_connection(req->conn_fd);
+        }
+        else {
+            init_request(req);
+        }
+        
     }
     else if (commands[0] == "unban")
     {
@@ -598,17 +603,24 @@ void process_request(request *req)
         tmp += '\0';
 
         sprintf(init_msg, "%01023ld", req->username != "admin" ? strlen(permission_denied_msg) + 1 : tmp.size() + 1);
-        send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
+        req->sent_bytes = send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
 
         if (req->username != "admin")
         {
-            send(req->conn_fd, permission_denied_msg, strlen(permission_denied_msg) + 1, MSG_NOSIGNAL);
+            req->sent_bytes = send(req->conn_fd, permission_denied_msg, strlen(permission_denied_msg) + 1, MSG_NOSIGNAL);
         }
         else
         {
-            send(req->conn_fd, tmp.c_str(), tmp.size() + 1, MSG_NOSIGNAL);
+            req->sent_bytes = send(req->conn_fd, tmp.c_str(), tmp.size() + 1, MSG_NOSIGNAL);
             for (int i = 1; i < commands.size(); i++)
                 banlist.erase(commands[i]);
+        }
+
+        if (req->sent_bytes < 0) {
+            terminate_connection(req->conn_fd);
+        }
+        else {
+            init_request(req);
         }
     }
     else if (commands[0] == "blocklist")
@@ -622,18 +634,32 @@ void process_request(request *req)
         tmp += '\0';
 
         sprintf(init_msg, "%01023ld", req->username != "admin" ? strlen(permission_denied_msg) + 1 : tmp.size() + 1);
-        send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
+        req->sent_bytes = send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
 
         if (req->username != "admin")
-            send(req->conn_fd, permission_denied_msg, strlen(permission_denied_msg) + 1, MSG_NOSIGNAL);
+            req->sent_bytes = send(req->conn_fd, permission_denied_msg, strlen(permission_denied_msg) + 1, MSG_NOSIGNAL);
         else
-            send(req->conn_fd, tmp.c_str(), tmp.size() + 1, MSG_NOSIGNAL);
+            req->sent_bytes = send(req->conn_fd, tmp.c_str(), tmp.size() + 1, MSG_NOSIGNAL);
+        
+        if (req->sent_bytes < 0) {
+            terminate_connection(req->conn_fd);
+        }
+        else {
+            init_request(req);
+        }
     }
     else
     {
         sprintf(init_msg, "%01023ld", strlen(invalid_command_msg) + 1);
-        send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
-        send(req->conn_fd, invalid_command_msg, strlen(invalid_command_msg) + 1, MSG_NOSIGNAL);
+        req->sent_bytes = send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
+        req->sent_bytes = send(req->conn_fd, invalid_command_msg, strlen(invalid_command_msg) + 1, MSG_NOSIGNAL);
+
+        if (req->sent_bytes < 0) {
+            terminate_connection(req->conn_fd);
+        }
+        else {
+            init_request(req);
+        }
     }
 }
 
