@@ -32,7 +32,7 @@ int sockfd, clientfd;
 int fd;
 char init_msg[1024];
 char end_msg[1024] = "sending the ending message\n";
-char command[1024], buf[1024];
+char command[8192], buf[1024];
 char username[512], ip[512], port[512];
 
 fd_set rfd, working_set;
@@ -84,8 +84,8 @@ int init(int argc, char **argv)
 
     // FL_SET(sockfd, O_NONBLOCK);
 
-    mkdir("./client_database", S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
-    chdir("./client_database");
+    mkdir("./client_dir", S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+    chdir("./client_dir");
 
     sprintf(buf, "hello %s\n", username);
     send(sockfd, buf, 1024, 0);
@@ -248,8 +248,7 @@ void process_command()
 
         send(sockfd, "send video package.\n\0", 21, MSG_NOSIGNAL);
 
-        while ((remain_bytes > 0) \
-        && ((recv_bytes = recv(sockfd, buffer + copy_from, imgSize - copy_from, 0)) > 0))
+        while ((remain_bytes > 0) && ((recv_bytes = recv(sockfd, buffer + copy_from, imgSize - copy_from, 0)) > 0))
         {
             copy_from += recv_bytes;
             remain_bytes -= recv_bytes;
@@ -264,7 +263,8 @@ void process_command()
                     send(sockfd, "terminate video.\n\0", 18, MSG_NOSIGNAL);
                     break;
                 }
-                else if (t < frame_num){
+                else if (t < frame_num)
+                {
                     send(sockfd, "send video package.\n\0", 21, MSG_NOSIGNAL);
                     // fprintf(stderr, "%d %d %d\n", ++t, copy_from, imgSize);
                 }
@@ -272,9 +272,8 @@ void process_command()
         }
 
         destroyAllWindows();
-
     }
-    else
+    else if (commands[0] == "ls" || commands[0] == "ban" || commands[0] == "unban" || commands[0] == "blocklist")
     {
         send(sockfd, command, 1024, 0);
         recv(sockfd, init_msg, 1024, 0);
@@ -289,6 +288,10 @@ void process_command()
             // fprintf(stderr, "remaining file size: %ld\n", remain_bytes);
             fprintf(stdout, "%s", buf);
         }
+    }
+    else
+    {
+        fprintf(stdout, "Commond not found\n");
     }
 }
 
@@ -308,7 +311,7 @@ int main(int argc, char **argv)
     {
         fprintf(stderr, "$ ");
 
-        read(STDIN_FILENO, command, 1024);
+        read(STDIN_FILENO, command, 8192);
 
         sprintf(init_msg, "greeting\n");
 

@@ -48,7 +48,7 @@ typedef struct
 
     std::string comm_buf;
 
-    char last_buf[1024];
+    char last_buf[8192];
     size_t last_buf_len;
 
     long long sent_bytes;
@@ -80,7 +80,7 @@ fd_set rfd, working_set;
 
 int fd;
 int ret;
-char buf[2097152];
+char buf[8192];
 char init_msg[1024];
 char end_msg[1024] = "sending the ending message\n";
 char permission_denied_msg[1024] = "permisson denied\n\0";
@@ -167,12 +167,12 @@ static void init_server(unsigned int port)
     timeout.tv_usec = 50;
 
     int status;
-    status = mkdir("./server_database", S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+    status = mkdir("./server_dir", S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
     // if (status < 0)
     // {
     //     ERR_EXIT("mkdir");
     // }
-    chdir("./server_database");
+    chdir("./server_dir");
 
     return;
 }
@@ -229,7 +229,7 @@ int handle_request(request *req)
 {
     int r;
 
-    r = read(req->conn_fd, buf, sizeof(buf));
+    r = read(req->conn_fd, buf, 1024);
     if (r <= 0)
     {
         fprintf(stderr, "read error from fd: %d\n", req->conn_fd);
@@ -286,7 +286,7 @@ void process_request(request *req)
         if (banlist.find(req->username) == banlist.end())
         {
             fprintf(stderr, "greeting: %s\n", req->username.c_str());
-            if (send(req->conn_fd, greeting_msg, strlen(greeting_msg) + 1, MSG_NOSIGNAL) < 0) 
+            if (send(req->conn_fd, greeting_msg, strlen(greeting_msg) + 1, MSG_NOSIGNAL) < 0)
             {
                 terminate_connection(req->conn_fd);
             }
@@ -294,7 +294,7 @@ void process_request(request *req)
         else
         {
             fprintf(stderr, "denied: %s\n", req->username.c_str());
-            if (send(req->conn_fd, permission_denied_msg, strlen(permission_denied_msg) + 1, MSG_NOSIGNAL) < 0) 
+            if (send(req->conn_fd, permission_denied_msg, strlen(permission_denied_msg) + 1, MSG_NOSIGNAL) < 0)
             {
                 terminate_connection(req->conn_fd);
             }
@@ -328,12 +328,12 @@ void process_request(request *req)
         tmp += '\0';
 
         sprintf(init_msg, "%01023ld", tmp.size() + 1);
-        if (send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL) < 0) 
+        if (send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL) < 0)
         {
             terminate_connection(req->conn_fd);
         }
 
-        if (send(req->conn_fd, tmp.c_str(), tmp.size() + 1, MSG_NOSIGNAL) < 0) 
+        if (send(req->conn_fd, tmp.c_str(), tmp.size() + 1, MSG_NOSIGNAL) < 0)
         {
             terminate_connection(req->conn_fd);
         }
@@ -353,10 +353,10 @@ void process_request(request *req)
                 ERR_EXIT("open file error");
             }
 
-            recv(req->conn_fd, init_msg, 1024, 0);
+            req->recv_bytes = recv(req->conn_fd, init_msg, 1024, 0);
             req->remain_bytes = atoi(init_msg);
             req->working = 1;
-            fprintf(stderr, "file size: %d\n", req->remain_bytes);
+            fprintf(stderr, "recv: %d file size: %d\n", req->recv_bytes, req->remain_bytes);
         }
 
         memcpy(&working_set, &rfd, sizeof(rfd));
@@ -365,9 +365,7 @@ void process_request(request *req)
             ERR_EXIT("select");
         }
 
-        if (FD_ISSET(req->conn_fd, &working_set) \
-        && (req->remain_bytes > 0) \
-        && (req->recv_bytes = recv(req->conn_fd, req->last_buf, 1024, 0)) > 0)
+        if (FD_ISSET(req->conn_fd, &working_set) && (req->remain_bytes > 0) && (req->recv_bytes = recv(req->conn_fd, req->last_buf, 8192, 0)) > 0)
         {
             req->remain_bytes -= req->recv_bytes;
             // fprintf(stderr, "remain bytes: %d\n", req->remain_bytes);
@@ -403,7 +401,7 @@ void process_request(request *req)
             if ((req->fd = open(filename, O_RDONLY)) < 0)
             {
                 // fprintf(stderr, "file: %s doesn't exist.\n", commands[1].c_str());
-                if (send(req->conn_fd, not_exist, strlen(not_exist) + 1, MSG_NOSIGNAL) < 0 ) 
+                if (send(req->conn_fd, not_exist, strlen(not_exist) + 1, MSG_NOSIGNAL) < 0)
                 {
                     terminate_connection(req->conn_fd);
                 }
@@ -417,10 +415,11 @@ void process_request(request *req)
             }
 
             sprintf(init_msg, "%01023ld", file_stat.st_size);
-            if (send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL) < 0) 
+            if (send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL) < 0)
             {
                 terminate_connection(req->conn_fd);
-                return ;
+                chdir("..");
+                return;
             }
 
             req->offset = 0;
@@ -429,9 +428,7 @@ void process_request(request *req)
             fprintf(stderr, "file size: %d\n", req->remain_bytes);
         }
 
-        if ((req->remain_bytes > 0) \
-         && (req->last_buf_len = read(req->fd, req->last_buf, 1024)) > 0 \
-         && (req->sent_bytes = send(req->conn_fd, req->last_buf, req->last_buf_len, MSG_NOSIGNAL)) > 0)
+        if ((req->remain_bytes > 0) && (req->last_buf_len = read(req->fd, req->last_buf, 1024)) > 0 && (req->sent_bytes = send(req->conn_fd, req->last_buf, req->last_buf_len, MSG_NOSIGNAL)) > 0)
         {
             req->remain_bytes -= req->sent_bytes;
             // fprintf(stderr, "remaining file size: %d\n", req->remain_bytes);
@@ -460,11 +457,11 @@ void process_request(request *req)
 
         VideoCapture cap(video_name);
 
-        if (req->remain_bytes == 0) 
+        if (req->remain_bytes == 0)
         {
-            if (access(video_name, F_OK) != 0) 
+            if (access(video_name, F_OK) != 0)
             {
-                if (send(req->conn_fd, not_exist, strlen(not_exist) + 1, MSG_NOSIGNAL) < 0 ) 
+                if (send(req->conn_fd, not_exist, strlen(not_exist) + 1, MSG_NOSIGNAL) < 0)
                 {
                     terminate_connection(req->conn_fd);
                 }
@@ -487,9 +484,10 @@ void process_request(request *req)
 
             int imgSize = req->img.total() * req->img.elemSize();
             sprintf(init_msg, "%200ld%200ld%200ld%200ld%200ld%23d", width, height, imgSize, 0, frame_num, 0);
-            if (send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL) < 0) {
+            if (send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL) < 0)
+            {
                 terminate_connection(req->conn_fd);
-                return ;
+                return;
             }
 
             cap >> req->img;
@@ -500,7 +498,8 @@ void process_request(request *req)
             req->img_size = imgSize;
             req->max_send_bytes = imgSize;
         }
-        else {
+        else
+        {
             cap = req->cap;
         }
 
@@ -512,22 +511,24 @@ void process_request(request *req)
 
         if (FD_ISSET(req->conn_fd, &working_set) && (req->recv_bytes = recv(req->conn_fd, req->last_buf, 1024, 0)) > 0)
         {
-            if (strcmp(req->last_buf, "send video package.\n") == 0) {
+            if (strcmp(req->last_buf, "send video package.\n") == 0)
+            {
                 // fprintf(stderr, "sending video pakcage %d\n", req->package++);
 
-                req->sent_bytes = send(req->conn_fd, req->img.data + req->offset, \
-                min(req->max_send_bytes, (long long)(req->img_size - req->offset)), MSG_NOSIGNAL);
+                req->sent_bytes = send(req->conn_fd, req->img.data + req->offset,
+                                       min(req->max_send_bytes, (long long)(req->img_size - req->offset)), MSG_NOSIGNAL);
 
-                if (req->sent_bytes < 0) 
+                if (req->sent_bytes < 0)
                 {
                     terminate_connection(req->conn_fd);
-                    return ;
+                    return;
                 }
 
-                req->offset         += req->sent_bytes;
-                req->remain_bytes   -= req->sent_bytes;
+                req->offset += req->sent_bytes;
+                req->remain_bytes -= req->sent_bytes;
 
-                if (req->offset == req->img_size) {
+                if (req->offset == req->img_size)
+                {
                     req->offset = 0;
                     cap >> req->img;
                 }
@@ -538,14 +539,16 @@ void process_request(request *req)
                     init_request(req);
                 }
             }
-            else if (strcmp(req->last_buf, "terminate video.\n") == 0){
+            else if (strcmp(req->last_buf, "terminate video.\n") == 0)
+            {
                 fprintf(stderr, "terminating video\n");
                 req->cap.release();
                 init_request(req);
             }
         }
 
-        if (req->recv_bytes == 0) {
+        if (req->recv_bytes == 0)
+        {
             terminate_connection(req->conn_fd);
         }
 
@@ -581,13 +584,14 @@ void process_request(request *req)
                     banlist.insert(commands[i]);
         }
 
-        if (req->sent_bytes < 0) {
+        if (req->sent_bytes < 0)
+        {
             terminate_connection(req->conn_fd);
         }
-        else {
+        else
+        {
             init_request(req);
         }
-        
     }
     else if (commands[0] == "unban")
     {
@@ -616,10 +620,12 @@ void process_request(request *req)
                 banlist.erase(commands[i]);
         }
 
-        if (req->sent_bytes < 0) {
+        if (req->sent_bytes < 0)
+        {
             terminate_connection(req->conn_fd);
         }
-        else {
+        else
+        {
             init_request(req);
         }
     }
@@ -640,11 +646,13 @@ void process_request(request *req)
             req->sent_bytes = send(req->conn_fd, permission_denied_msg, strlen(permission_denied_msg) + 1, MSG_NOSIGNAL);
         else
             req->sent_bytes = send(req->conn_fd, tmp.c_str(), tmp.size() + 1, MSG_NOSIGNAL);
-        
-        if (req->sent_bytes < 0) {
+
+        if (req->sent_bytes < 0)
+        {
             terminate_connection(req->conn_fd);
         }
-        else {
+        else
+        {
             init_request(req);
         }
     }
@@ -654,10 +662,12 @@ void process_request(request *req)
         req->sent_bytes = send(req->conn_fd, init_msg, 1024, MSG_NOSIGNAL);
         req->sent_bytes = send(req->conn_fd, invalid_command_msg, strlen(invalid_command_msg) + 1, MSG_NOSIGNAL);
 
-        if (req->sent_bytes < 0) {
+        if (req->sent_bytes < 0)
+        {
             terminate_connection(req->conn_fd);
         }
-        else {
+        else
+        {
             init_request(req);
         }
     }
