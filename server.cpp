@@ -59,8 +59,6 @@ typedef struct
     bool working;
 
     off_t offset;
-
-    VideoCapture cap;
     Mat img;
 
     int img_size;
@@ -94,6 +92,8 @@ struct stat file_stat;
 int remain_bytes;
 
 std::set<std::string> banlist;
+
+VideoCapture caps[1024];
 
 static void init_request(request *req)
 {
@@ -493,14 +493,14 @@ void process_request(request *req)
             cap >> req->img;
 
             req->working = 1;
-            req->cap = cap;
+            caps[req->conn_fd] = cap;
             req->remain_bytes = frame_num * imgSize;
             req->img_size = imgSize;
             req->max_send_bytes = imgSize;
         }
         else
         {
-            cap = req->cap;
+            cap = caps[req->conn_fd];
         }
 
         memcpy(&working_set, &rfd, sizeof(rfd));
@@ -513,14 +513,24 @@ void process_request(request *req)
         {
             if (strcmp(req->last_buf, "send video package.\n") == 0)
             {
-                // fprintf(stderr, "sending video pakcage %d\n", req->package++);
+                fprintf(stderr, "sending video pakcage %d\n", req->package++);
 
                 req->sent_bytes = send(req->conn_fd, req->img.data + req->offset,
                                        min(req->max_send_bytes, (long long)(req->img_size - req->offset)), MSG_NOSIGNAL);
 
                 if (req->sent_bytes < 0)
                 {
-                    terminate_connection(req->conn_fd);
+                    fprintf(stderr, "errno: %d\n", errno);
+                    if (errno == EFAULT) {
+                        send(req->conn_fd, "terminate video.\n\0", 19, MSG_NOSIGNAL);    
+                    }
+                    else {
+                        terminate_connection(req->conn_fd);
+                    }
+
+                    cap.release();    
+                    init_request(req);
+                    chdir("..");
                     return;
                 }
 
@@ -535,14 +545,14 @@ void process_request(request *req)
 
                 if (req->remain_bytes == 0)
                 {
-                    req->cap.release();
+                    cap.release();
                     init_request(req);
                 }
             }
             else if (strcmp(req->last_buf, "terminate video.\n") == 0)
             {
                 fprintf(stderr, "terminating video\n");
-                req->cap.release();
+                cap.release();
                 init_request(req);
             }
         }

@@ -250,6 +250,12 @@ void process_command()
 
         while ((remain_bytes > 0) && ((recv_bytes = recv(sockfd, buffer + copy_from, imgSize - copy_from, 0)) > 0))
         {
+            if (strcmp(buffer, "terminate video.\n") == 0) {
+                break;
+            }
+
+            // fprintf(stderr, "%s", buffer);
+
             copy_from += recv_bytes;
             remain_bytes -= recv_bytes;
             if (copy_from == imgSize)
@@ -266,7 +272,7 @@ void process_command()
                 else if (t < frame_num)
                 {
                     send(sockfd, "send video package.\n\0", 21, MSG_NOSIGNAL);
-                    // fprintf(stderr, "%d %d %d\n", ++t, copy_from, imgSize);
+                    fprintf(stderr, "%d %d %d\n", ++t, copy_from, imgSize);
                 }
             }
         }
