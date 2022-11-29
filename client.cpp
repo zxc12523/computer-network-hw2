@@ -281,18 +281,31 @@ void process_command()
     }
     else if (commands[0] == "ls" || commands[0] == "ban" || commands[0] == "unban" || commands[0] == "blocklist")
     {
-        send(sockfd, command, 1024, 0);
-        recv(sockfd, init_msg, 1024, 0);
+        int ind = 1;
+        while(ind < commands.size()) {
+            std::string tmp = commands[0];
 
-        offset = 0;
-        remain_bytes = atoi(init_msg);
+            while (tmp.size() + commands[ind].size() + 1 < 1024)
+            {
+                tmp += ' ';
+                tmp += commands[ind++];
+            }
 
-        while ((remain_bytes > 0) && ((recv_bytes = recv(sockfd, buf, 1024, 0)) > 0))
-        {
-            // fprintf(stderr, "received bytes: %ld bytes\n", recv_bytes);
-            remain_bytes -= recv_bytes;
-            // fprintf(stderr, "remaining file size: %ld\n", remain_bytes);
-            fprintf(stdout, "%s", buf);
+            tmp += '\n';
+
+            send(sockfd, tmp.c_str(), 1024, 0);
+            recv(sockfd, init_msg, 1024, 0);
+
+            offset = 0;
+            remain_bytes = atoi(init_msg);
+
+            while ((remain_bytes > 0) && ((recv_bytes = recv(sockfd, buf, 1024, 0)) > 0))
+            {
+                // fprintf(stderr, "received bytes: %ld bytes\n", recv_bytes);
+                remain_bytes -= recv_bytes;
+                // fprintf(stderr, "remaining file size: %ld\n", remain_bytes);
+                fprintf(stdout, "%s", buf);
+            }
         }
     }
     else
