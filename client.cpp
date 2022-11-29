@@ -282,17 +282,16 @@ void process_command()
     else if (commands[0] == "ls" || commands[0] == "ban" || commands[0] == "unban" || commands[0] == "blocklist")
     {
         int ind = 1;
-        while(ind < commands.size()) {
+        while(1) {
             std::string tmp = commands[0];
 
-            while (tmp.size() + commands[ind].size() + 1 < 1024)
+            while (ind < commands.size() && tmp.size() + commands[ind].size() + 1 < 1024)
             {
                 tmp += ' ';
                 tmp += commands[ind++];
             }
 
             tmp += '\n';
-
             send(sockfd, tmp.c_str(), 1024, 0);
             recv(sockfd, init_msg, 1024, 0);
 
@@ -306,6 +305,9 @@ void process_command()
                 // fprintf(stderr, "remaining file size: %ld\n", remain_bytes);
                 fprintf(stdout, "%s", buf);
             }
+
+	    if (ind == commands.size())
+		break;
         }
     }
     else
